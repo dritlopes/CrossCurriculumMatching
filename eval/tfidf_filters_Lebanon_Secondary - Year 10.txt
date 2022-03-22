@@ -1,0 +1,4 @@
+TF-IDF baseline
+Curriculum: Lebanon
+Grade: Secondary - Year 10
+MAP: 0.6666216098147743,MRR: 0.6908602150537635

@@ -1,0 +1,4 @@
+TF-IDF baseline
+Curriculum: Lebanon
+Grade: Elementary - Year 6
+MAP: 0.7200085800085799,MRR: 0.7747747747747747
