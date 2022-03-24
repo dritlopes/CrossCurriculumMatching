@@ -7,6 +7,10 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 import numpy as np
 import requests
 import time
+from nltk import pos_tag
+from nltk.tokenize import sent_tokenize, word_tokenize
+import fasttext.util
+import fasttext
 
 def get_features (source, target, features, age_to_grade = None, doc_sums = None):
 
@@ -40,7 +44,18 @@ def get_features (source, target, features, age_to_grade = None, doc_sums = None
                             if 'doc_sum' in features:
                                 source_dict['doc_sums'] = []
                                 if doc_sums[query_id]:
-                                    source_dict["doc_sums"] = doc_sums[query_id]
+                                    sentences = []
+                                    for doc in doc_sums[query_id]:
+                                        # sentences.append(sent_tokenize(doc)[0])
+                                        sents = sent_tokenize(doc)
+                                        tags_label = pos_tag(word_tokenize(query['label']))
+                                        nouns = [word for word, pos in tags_label if pos.startswith('NN')]
+                                        for sent in sents:
+                                            tokens = word_tokenize(sent)
+                                            for token in tokens:
+                                                if token in nouns and sent not in sentences:
+                                                    sentences.append(sent)
+                                    source_dict["doc_sums"] = sentences
 
                             source_features.append(source_dict)
 
@@ -60,7 +75,7 @@ def get_features (source, target, features, age_to_grade = None, doc_sums = None
     return source_features, target_features
 
 
-def average_embeddings (model, source_features,label_encodings):
+def average_embeddings (model, model_name, source_features,label_encodings):
 
     source_encodings = []
 
@@ -72,66 +87,56 @@ def average_embeddings (model, source_features,label_encodings):
             query_doc_titles = source_features[i]['doc_titles']
             # average the encodings only if doc titles is not an empty list (if at least one result is pinned)
             if query_doc_titles != []:
-                title_encodings = model.encode(query_doc_titles)
-                title_encodings = np.mean(title_encodings, axis=0)
-                query_encoding = np.vstack((query_encoding,title_encodings))
+                if model_name == '../models/cc.en.300.bin':
+                    title_encodings = []
+                    for title in query_doc_titles:
+                        title_encodings.append(model.get_sentence_vector(title.replace('\n','')))
+                else:
+                    title_encodings = model.encode(query_doc_titles)
+                title_encodings = np.mean(np.array(title_encodings), axis=0)
+                query_encoding = np.vstack((np.array(query_encoding),title_encodings))
                 # print(query_encoding.shape)
 
         if 'doc_sums' in source_features[0].keys():
             query_doc_sums = source_features[i]['doc_sums']
             if query_doc_sums != []:
-                sum_encodings = model.encode(query_doc_sums)
-                sum_encodings = np.mean(sum_encodings,axis=0)
-                query_encoding = np.vstack((query_encoding, sum_encodings))
+                if model_name == '../models/cc.en.300.bin':
+                    sum_encodings = []
+                    for sum in query_doc_sums:
+                        sum_encodings.append(model.get_sentence_vector(sum.replace('\n','')))
+                else:
+                    sum_encodings = model.encode(query_doc_sums)
+                sum_encodings = np.mean(np.array(sum_encodings),axis=0)
+                query_encoding = np.vstack((np.array(query_encoding), sum_encodings))
 
         query_encoding = np.mean(query_encoding, axis=0)
 
         source_encodings.append(query_encoding)
 
-        # # average the encodings only if doc titles is not an empty list (if at least one result is pinned)
-        # if source_doc_titles[i] != []:
-        #     title_encodings = model.encode(source_doc_titles[i])
-        #     # print(title_encodings.shape)
-        #     # average over document titles
-        #     # title_encodings = np.mean(title_encodings, axis=0)
-        #     # print(titles_encoding.shape)
-        #     # stack resulting vector with label vector
-        #     # print(source_label_embeddings[i].shape)
-        #     source_encoding = np.vstack((source_label_embeddings[i],title_encodings))
-        #     # print(source_encoding.shape)
-        #     # average over label and titles
-        #     source_encoding = np.mean(source_encoding,axis=0)
-        #     source_encodings.append(source_encoding)
-        # else: source_encodings.append(source_label_embeddings[i])
-
     return source_encodings
 
 
-def get_encodings (source_features, target_features, model_name):
+def get_encodings (source_features, target_features, model_filepath):
 
     start_time = time.perf_counter()
 
     source_labels = [source_dict.pop('label') for source_dict in source_features]
     target_labels = [target_dict.pop('label') for target_dict in target_features]
 
-    model_filepath = None
+    if model_filepath == '../models/cc.en.300.bin':
+        # fasttext.util.download_model('en', if_exists='ignore')
+        model = fasttext.load_model(model_filepath)
+        source_encodings, target_encodings = [], []
+        for label in source_labels: source_encodings.append(model.get_sentence_vector(label))
+        for label in target_labels: target_encodings.append(model.get_sentence_vector(label))
 
-    # sbert fine-tuned for semantic search with queries and documents from wizenoze
-    if model_name == 'wize-sbert':
-        model_filepath = '../models/biencoder_model'
+    else:
+        model = SentenceTransformer(model_filepath)
+        source_encodings = model.encode(source_labels)
+        target_encodings = model.encode(target_labels)
 
-    # sbert pre-trained on canonical data: AllNLI, sentence-compression, SimpleWiki, altlex, msmarco-triplets, quora_duplicates, coco_captions,flickr30k_captions, yahoo_answers_title_question, S2ORC_citation_pairs, stackexchange_duplicate_questions, wiki-atomic-edits
-    elif model_name == 'sbert':
-        model_filepath = "sentence-transformers/paraphrase-MiniLM-L6-v2"
-
-    elif model_name == 'query2query-sbert':
-        model_filepath = '../models/query2query-sbert'
-
-    model = SentenceTransformer(model_filepath)
-    source_encodings = model.encode(source_labels)
-    target_encodings = model.encode(target_labels)
     if 'doc_titles' in source_features[0].keys() or 'doc_sums' in source_features[0].keys():
-        source_encodings = average_embeddings(model, source_features, source_encodings)
+        source_encodings = average_embeddings(model, model_filepath, source_features, source_encodings)
 
     end_time = time.perf_counter()
     print(f"It took {end_time - start_time:0.4f} seconds to encode queries")

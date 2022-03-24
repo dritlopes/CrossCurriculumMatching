@@ -1,12 +1,16 @@
 import csv
+import os
 from typing import Iterable, Dict, List, Set
 from typing import Tuple
 from sentence_transformers import InputExample
 from torch.utils.data import IterableDataset
 from collections import defaultdict
 from sentence_transformers import models, SentenceTransformer, evaluation, losses
+from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
 from utils import generate_triplets_file, generate_query_file
+import pandas as pd
+import numpy as np
 
 
 class QueryLinks:
@@ -19,9 +23,11 @@ class QueryLinks:
             query_id = str(line["id"])
             query_term = str(line["label"])
             doc_titles = str(line["docTitles"])
+            doc_sums_1sent = str(line["docSums1sent"])
+            doc_sums_nsent = str(line["docSumsNsent"])
 
             self.queries[query_id] = query_term
-            self.docs[query_id] = query_term + ' ' + doc_titles
+            self.docs[query_id] = query_term + ' ' + doc_titles + ' ' + doc_sums_1sent
 
     def get_document(self, doc_id: str) -> str:
         return self.docs[doc_id]
@@ -60,7 +66,7 @@ class TripletsDataset(IterableDataset):
         )
 
 
-def main():
+def fine_tune_bert (fine_tune_args):
 
     TRAIN_FILEPATH = '../data/train_query_pairs.csv'
     DEV_FILEPATH = '../data/dev_query_pairs.csv'
@@ -70,16 +76,32 @@ def main():
     QUERY_FILE = '../data/query_info.csv'
     MODEL_OUTPUT_PATH = '../models/query2query-SBERT'
 
-    target_queries = generate_triplets_file(TRAIN_FILEPATH, TRAIN_TRIPLETS_FILE)
-    dev_target_queries = generate_triplets_file(DEV_FILEPATH, DEV_TRIPLETS_FILE)
-    tq = target_queries | dev_target_queries
-    generate_query_file(DATA_DICT_FILE, QUERY_FILE, tq)
+    if not os.path.isfile(TRAIN_TRIPLETS_FILE):
+        generate_triplets_file(TRAIN_FILEPATH, TRAIN_TRIPLETS_FILE)
+    if not os.path.isfile(DEV_TRIPLETS_FILE):
+        generate_triplets_file(DEV_FILEPATH, DEV_TRIPLETS_FILE)
 
     with open(TRAIN_TRIPLETS_FILE) as f:
         train_triplets: List[Dict[str, str]] = [line for line in csv.DictReader(f, delimiter='\t')]
-
     with open(DEV_TRIPLETS_FILE) as f:
         test_triplets: List[Dict[str, str]] = [line for line in csv.DictReader(f, delimiter='\t')]
+
+    if not os.path.isfile(QUERY_FILE):
+
+        all_queries = set()
+
+        for triplet_list in [train_triplets, test_triplets]:
+            for triplet_dict in triplet_list:
+                all_queries.add(triplet_dict['qid'])
+                all_queries.add(triplet_dict['pos_id'])
+                all_queries.add(triplet_dict['neg_id'])
+
+        doc_sums_df = pd.read_csv('../data/doc_sums.csv', sep='\t', dtype={'queryId': str})
+        doc_sums = defaultdict(list)
+        for query_id, docs in doc_sums_df.groupby(['queryId']):
+            doc_sums[query_id] = [doc_sum for doc_sum in list(docs['sumText'])]
+
+        generate_query_file(DATA_DICT_FILE, QUERY_FILE, all_queries, doc_sums)
 
     query_links = QueryLinks.from_file(QUERY_FILE)
 
@@ -112,6 +134,22 @@ def main():
     # pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
     # model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
     model = SentenceTransformer(BASE_MODEL)
+    # model.max_seq_length = 200
+
+    # check how long the source queries are with doc titles and sums
+    # tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
+    # source_queries = []
+    # for triplet in train_triplets:
+    #     pos_doc = query_links.get_document(triplet["pos_id"])
+    #     neg_doc = query_links.get_document(triplet["neg_id"])
+    #     source_queries.append(pos_doc)
+    #     source_queries.append(neg_doc)
+    # encoded_input = tokenizer(source_queries, padding=False, truncation=False)
+    # longer = [len(encoded) for encoded in encoded_input['input_ids'] if len(encoded) > 128]
+    # print(len(source_queries), len(longer), sum(longer)/len(longer))
+    # lengths = [len(encoded) for encoded in encoded_input['input_ids']]
+    # print(sum(lengths)/len(lengths), np.std(np.array(lengths)))
+    # exit()
 
     evaluator = evaluation.InformationRetrievalEvaluator(
         test_queries, test_corpus, test_rel_docs)
@@ -121,9 +159,11 @@ def main():
     train_dataset = TripletsDataset(
         model=model, query_links=query_links, triplets=train_triplets
     )
+
     train_dataloader = DataLoader(
         train_dataset, shuffle=False, batch_size=TRAIN_BATCH_SIZE
     )
+
     train_loss = losses.MultipleNegativesRankingLoss(model=model)
 
     model.fit(
@@ -135,6 +175,3 @@ def main():
         evaluation_steps=500,
         use_amp=True
     )
-
-if __name__ == '__main__':
-    main()

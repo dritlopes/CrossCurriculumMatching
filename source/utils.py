@@ -9,6 +9,8 @@ import time
 import requests
 import random
 import json
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk import pos_tag
 
 def dump_to_json (filepath):
 
@@ -338,7 +340,7 @@ def generate_train_test(target_data, verbose=False):
             for cur, p in dist:
                 print(f"{cur}: {round(p, 4)}\n")
 
-    return data_train, data_dev, data_test
+    # return data_train, data_dev, data_test
 
 
 def generate_test_lebanon (filepath_to_excel):
@@ -357,13 +359,10 @@ def generate_test_lebanon (filepath_to_excel):
 
 def generate_triplets_file(FILEPATH, TRIPLETS_FILE):
 
-    positive_pairs = pd.read_csv(FILEPATH, sep='\t')
-
-    # cast ids from floats to strings
-    for column_id in ['TARGET_ID', 'SOURCE_ID', 'TARGET_GRADEID', 'SOURCE_GRADEID']:
-        positive_pairs[column_id] = positive_pairs[column_id].astype(str)
-        if column_id in {'TARGET_GRADEID', 'SOURCE_GRADEID'}:
-            positive_pairs[column_id] = positive_pairs[column_id].map(lambda x: x.strip('.0'))
+    positive_pairs = pd.read_csv(FILEPATH, sep='\t', dtype={'TARGET_ID': str,
+                                                          'SOURCE_ID': str,
+                                                          'TARGET_GRADEID': str,
+                                                          'SOURCE_GRADEID': str})
 
     # find a negative example for each target query from the remaining queries (not in target curriculum, not in positive set and not the search query)
     negative_queries = []
@@ -386,11 +385,11 @@ def generate_triplets_file(FILEPATH, TRIPLETS_FILE):
         out.write('qid' + '\t' + 'pos_id' + '\t' + 'neg_id' + '\n')
         for i in range(len(target_queries)):
             out.write(f'{target_queries[i]}\t{positive_queries[i]}\t{negative_queries[i]}\n')
-    queries = target_queries + positive_queries
+    # queries = target_queries + positive_queries
+    #
+    # return set(queries)
 
-    return set(queries)
-
-def generate_query_file(DATA_DICT_FILE, QUERY_FILE, target_queries):
+def generate_query_file(DATA_DICT_FILE, QUERY_FILE, target_queries, doc_sums):
 
   with open(DATA_DICT_FILE) as json_file:
       data = json.load(json_file)
@@ -401,13 +400,39 @@ def generate_query_file(DATA_DICT_FILE, QUERY_FILE, target_queries):
         for unit_id, unit in subject['unit'].items():
           for topic_id, topic in unit['topic'].items():
             for query_id, query in topic['query'].items():
+
               if query_id in target_queries:
+
                 label = query['label']
                 if label == '': label = topic['label']
-                rows.append({'id': query_id,
-                            'label': label,
-                            'doc_titles': ' '.join([doc_info['title'] for doc_info in query['docs'].values() if doc_info['pin']])})
+                query_dict = {'id': query_id,
+                             'label': label,
+                             'doc_titles': ' '.join(
+                                 [doc_info['title'] for doc_info in query['docs'].values() if doc_info['pin']]),
+                              'doc_sums_1sent': '',
+                              'doc_sums_nsent': ''}
+
+                if doc_sums[query_id]:
+                    doc_sums_1sent = []
+                    doc_sums_nsent = []
+                    for sum in doc_sums[query_id]:
+                        sents = sent_tokenize(sum)
+                        doc_sums_1sent.append(sents[0])
+                        tags_label = pos_tag(word_tokenize(label))
+                        nouns = [word for word,pos in tags_label if pos.startswith('NN')]
+                        for sent in sents:
+                            tokens = word_tokenize(sent)
+                            for token in tokens:
+                                if token in nouns and sent not in doc_sums_nsent:
+                                   doc_sums_nsent.append(sent)
+                    query_dict['doc_sums_1sent'] = ' '.join(doc_sums_1sent)
+                    query_dict['doc_sums_nsent'] = ' '.join(doc_sums_nsent)
+
+                rows.append(query_dict)
+
+
   with open(QUERY_FILE, 'w') as out:
-    out.write('id'+'\t'+'label'+'\t'+'docTitles'+'\n')
+    out.write('id'+'\t'+'label'+'\t'+'docTitles'+'\t'+'docSums1sent'+'\t'+'docSumsNsent'+'\n')
     for query_dict in rows:
-      out.write(f'{query_dict["id"]}\t{query_dict["label"]}\t{query_dict["doc_titles"]}\n')
+      out.write(f'{query_dict["id"]}\t{query_dict["label"]}\t{query_dict["doc_titles"]}\t{query_dict["doc_sums_1sent"]}'
+                f'\t{query_dict["doc_sums_nsent"]}\n')

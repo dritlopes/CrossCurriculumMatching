@@ -5,11 +5,12 @@ from utils import dump_to_json, generate_shared_docs_set, find_query_copies, gra
 from data_exploration import generate_stats, target_set_stats
 from generate_search_space import get_search_space
 from match_learning_objectives import find_best_queries
-from evaluation import eval_ranking
+from evaluation import eval_ranking, topn_recall
 import time
 import os
 from tfidf_baseline import tfidf_match
 from collections import defaultdict
+from finetune_sbert import fine_tune_bert
 
 
 def read_in_data(source_filepath):
@@ -54,6 +55,7 @@ def read_in_target(target_filepath):
 
 def main():
 
+
     dump_filepath = '../data/20220215-curriculum-data-export-report-production.csv'
     source_filepath = '../data/data_dict.json'
     # source_filepath = '../data/20220215-curriculum-data-export-report-production.csv'
@@ -65,9 +67,17 @@ def main():
     source_subjects = ''
     filters = {'curriculums': source_curriculums, 'grades': source_grades, 'subjects': source_subjects}
     # features = ['age','doc_title','subject']
-    model_name = 'query2query-sbert'
-    k = 5
+    model_filepath = '../models/paraphrase-sbert-label-title-sumsnsents-rankingloss'
+    k = 5 # 20, 50, 100
     filterAge = False
+    mode = 'dev'
+    fine_tune = False
+    fine_tune_args = {'pre_trained_model': 'sentence-transformers/paraphrase-MiniLM-L6-v2',
+                      'batch_size': int(12),
+                      'epochs': int(3),
+                      'train_loss': 'ranking',
+                      'evaluator': 'information_retrieval',
+                      'source': 'label,doc_titles'}
 
     print('Reading in data...')
     # read in database
@@ -84,15 +94,29 @@ def main():
     # generate train and test sets with search queries
     if not os.path.isfile(f'../data/query_pairs_{source_curriculums}.csv'):
         generate_shared_docs_set (dump_filepath, source_curriculums, query_copies)
-    # generate_shared_docs_set(dump_filepath, source_curriculums, query_copies)
-    target_data = read_in_target(target_filepath)
-    train, dev, test = generate_train_test(target_data)
 
+    if not os.path.isfile(f'../data/{mode}_query_pairs.csv'):
+        target_data = read_in_target(target_filepath)
+        generate_train_test(target_data)
 
-    for features in [['doc_sum']]:
+    if fine_tune:
+        fine_tune_bert(fine_tune_args)
+
+    if mode == 'test':
+        test = pd.read_csv('../data/test_query_pairs.csv', sep='\t', dtype= {'TARGET_ID': str,
+                                                                       'TARGET_GRADEID': str,
+                                                                       'SOURCE_ID': str,
+                                                                       'SOURCE_GRADEID': str})
+    else:
+        test = pd.read_csv('../data/dev_query_pairs.csv', sep='\t', dtype= {'TARGET_ID': str,
+                                                                       'TARGET_GRADEID': str,
+                                                                       'SOURCE_ID': str,
+                                                                       'SOURCE_GRADEID': str})
+
+    for features in [['doc_title','doc_sum']]:
 
         matches_per_cur = []
-        results_filepath = f'../results/dev_{model_name}_top{k}_{features}_filterAge{filterAge}.csv'
+        results_filepath = f'../results/{mode}_{model_filepath.replace("../models/","").replace("sentence-transformers/", "")}_top{k}_{features}_filterAge{filterAge}.csv'
 
         age_to_grade = None
         if filterAge or 'age' in features:
@@ -105,7 +129,7 @@ def main():
             for query_id, docs in doc_sums_df.groupby(['queryId']):
                 doc_sums[query_id] = [doc_sum for doc_sum in list(docs['sumText'])]
 
-        for index, cur_group in dev.groupby(['TARGET_CURRICULUM']):
+        for index, cur_group in test.groupby(['TARGET_CURRICULUM']):
 
             cur_group_dict = cur_group.to_dict(orient='list')
             target_cur = cur_group_dict['TARGET_CURRICULUM'][0]
@@ -115,7 +139,7 @@ def main():
             print(f'\nTARGET CURRICULUM: {target_cur}\n'
                   f'N of SEARCH QUERIES: {len(set(cur_group_dict["TARGET_ID"]))}\n'
                   f'FILTERS: {filters}\n'
-                  f'MODEL: {model_name}\n'
+                  f'MODEL: {model_filepath.replace("../models/","")}\n'
                   f'FEATURES: {features}\n'
                   f'K: {k}\n')
 
@@ -127,7 +151,7 @@ def main():
             target = cur_group.drop_duplicates(['TARGET_ID'])
             target = target.to_dict(orient='list')
 
-            if model_name == 'tf-idf':
+            if 'tf-idf' in model_filepath:
                 print('Matching queries...')
                 matches = tfidf_match(target_cur, source_curriculums, target)
 
@@ -138,7 +162,7 @@ def main():
                 print('Matching queries...')
                 # target = cur_group.drop_duplicates(['TARGET_ID'])
                 # target = target.to_dict(orient='list')
-                matches = find_best_queries(source, target, model_name, features, k, age_to_grade, doc_sums)
+                matches = find_best_queries(source, target, model_filepath, features, k, age_to_grade, doc_sums)
 
             matches_per_cur.append((target_cur,matches))
 
@@ -154,13 +178,17 @@ def main():
                         outfile.write(f'{target_cur}\t{target_dict["label"]}\t{target_id}\t{target_dict["path"]}'
                                       f'\t{source_label}\t{id}\t{path}\t{score}\n')
 
+        # check recall of topn
+        predictions = pd.read_csv(results_filepath, sep='\t',dtype={'TARGET_ID': str, 'SOURCE_ID': str})
+        recall = topn_recall(predictions,test,query_copies)
+        print(f'Recall of top {k} predictions: {recall}')
 
         print('Evaluating results...')
-        predictions = pd.read_csv(results_filepath,sep='\t')
+        predictions = pd.read_csv(results_filepath,sep='\t',dtype={'TARGET_ID': str, 'SOURCE_ID': str})
         eval = dict()
 
         for cur_name, cur_predictions in predictions.groupby(['TARGET_CURRICULUM']):
-            eval_dict = eval_ranking(cur_predictions,dev,query_copies,verbose=True)
+            eval_dict = eval_ranking(cur_predictions,test,query_copies,verbose=True)
             eval[cur_name] = eval_dict
 
         map_values = [eval_dict['map'] for eval_dict in list(eval.values())]
@@ -181,82 +209,6 @@ def main():
             json.dump(eval, outfile)
 
         print(f'DONE!\n')
-
-
-    # print('Evaluating results...')
-    # target_cur = 'Cambridge'
-    # features = ['age', 'doc_title', 'subject']
-    # results_filepath = f'../results/shared_docs_{target_cur}_{model_name}_top{k}_{features}.csv'
-    # predictions = pd.read_csv(results_filepath,sep='\t')
-    # map, mrr, r_p = eval_ranking(predictions,train,query_copies)
-    # with open(f'../eval/shared_docs_{model_name}_top{k}_{features}.txt', 'w') as outfile:
-    #     outfile.write(f'Target curricula: {set(predictions["TARGET_CURRICULUM"])}\n'
-    #                   f'MAP: {map}\n'
-    #                   f'R-precision: {r_p}\n'
-    #                   f'MRR: {mrr}\n')
-    #
-    # print(f'DONE!\n')
-
-
-    # for target_grade, filterAge in [('Elementary - Year 6', False),
-    #                                 ('Elementary - Year 6',True),
-    #                                 ('Intermediate - Year 7',False),
-    #                                 ('Intermediate - Year 7', True),
-    #                                 ('Intermediate - Year 8', False),
-    #                                 ('Intermediate - Year 8', True),
-    #                                 ('Secondary - Year 10', False),
-    #                                 ('Secondary - Year 10', True)]:
-
-    # for target_grade in ['Secondary - Year 10']:
-    #
-    #     filters = {'curriculums': source_curriculums, 'grades': (filterAge, source_grades), 'subjects': source_subjects}
-    #     parameters_basename = f'{target_cur}_{target_grade}_{model_name}_top{k}_filterAge{filters["grades"][0]}_AgeFeature{age_as_feature}'
-    #     results_filepath = f'../results/{parameters_basename}.csv'
-    #
-    #
-    #     start_time = time.perf_counter()
-    #
-    #     print(f'\nTARGET CURRICULUM: {target_cur}\n'
-    #           f'TARGET GRADE: {target_grade}\n'
-    #           f'FILTER AGE: {filterAge}\n'
-    #           f'MODEL: {model_name}\n'
-    #           f'AGE AS FEATURE: {age_as_feature}\n'
-    #           f'K: {k}\n')
-    #
-    #     # read in target data
-    #     target = read_in_target (target_filepath, target_grade)
-    #
-    #     # get general descriptive stats
-    #     # generate_stats(data)
-    #     # target_set_stats(target)
-    #
-    #
-    #     # generate search space (candidate queries/topics generation)
-    #     print('Generating search space...')
-    #     source = get_search_space(data, filters, target_cur, target_grade, query_copies, age_to_grade)
-    #
-    #     # match
-    #     print('Matching learning objectives...')
-    #     matches = match_lo(source, target, model_name, k, target_grade, target_cur, age_to_grade)
-    #
-    #     end_time = time.perf_counter()
-    #     print(f"{len(list(dict.fromkeys(target['learning objective'].tolist())))} learning objectives matched in {end_time - start_time:0.4f} seconds")
-    #
-    #     # write out results
-    #     with open(results_filepath, 'w') as outfile:
-    #         outfile.write(f'learning objective\ttopic/query\tid\tscore\n')
-    #         for trgt, pred in matches.items():
-    #             for instance, id, score in pred:
-    #                 outfile.write(f'{trgt}\t{instance}\t{id}\t{score}\n')
-    #
-    #     print(f'Evaluating...')
-    #     # evaluate
-    #     results = pd.read_csv(results_filepath, sep='\t')
-    #     evaluate_dev_pre_study(results,target,parameters_basename,query_copies)
-    #     eval_tfidf_baseline(target, target_cur, target_grade)
-    #
-    #
-    #     print(f'DONE!')
 
 
 if __name__ == '__main__':

@@ -42,34 +42,24 @@ def eval_ranking (predictions, gold, query_copies, verbose = False):
     ranks = []
     r_ranks= []
     # gold[["TARGET_ID", "SOURCE_ID"]] = gold[["TARGET_ID", "SOURCE_ID"]].astype(str)
-    for column in ['TARGET_ID', 'SOURCE_ID']:
-        predictions[column] = predictions[column].astype(str).map(lambda x: x.strip('.0'))
     # print(predictions.isnull().any())
 
     for pred_name, pred_group in predictions.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
-
         pred_dict = pred_group.to_dict(orient='list')
         # if pred_group.isnull().values.any():
         #     print(pred_dict)
-
         for gold_name, gold_group in gold.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
-
             if gold_name == pred_name:
-
                 gold_dict = gold_group.to_dict(orient='list')
                 gold_queries = gold_dict['SOURCE_ID']
-
                 correct = []
-
                 for i in range(0,len(pred_dict['SOURCE_ID'])):
-
                     if pred_dict['SOURCE_ID'][i] in gold_queries:
                         correct.append(1)
                     elif query_copies[str(pred_dict['SOURCE'][i]).lower()]:
                         if set(query_copies[str(pred_dict['SOURCE'][i]).lower()]).intersection(set(gold_queries)):
                             correct.append(1)
                     else: correct.append(0)
-
                 ranks.append(correct)
                 r_ranks.append(correct[:len(gold_queries)]) # k is conditioned to R
                 break
@@ -161,5 +151,23 @@ def evaluate_dev_pre_study (pred, ann, parameters_basepath, query_copies, verbos
         f'Number of matches predicted in preliminarity study which are also predicted by this system: {true_positives + false_positives}\n'
         f'Out of these, proportion of correctly predicted matches: {precision}\n')
 
+def topn_recall(predictions, gold, query_copies):
 
+    tp, fn = 0, 0
+    for pred_name, pred_group in predictions.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
+        pred_dict = pred_group.to_dict(orient='list')
+        for gold_name, gold_group in gold.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
+            if gold_name == pred_name:
+                gold_dict = gold_group.to_dict(orient='list')
+                for i in range(0,len(gold_dict['SOURCE_ID'])):
+                    if gold_dict['SOURCE_ID'][i] in pred_dict['SOURCE_ID']:
+                        tp += 1
+                    elif query_copies[str(gold_dict['SOURCE'][i]).lower()]:
+                        if set(query_copies[str(gold_dict['SOURCE'][i]).lower()]).intersection(set(pred_dict['SOURCE_ID'])):
+                            tp += 1
+                    else: fn += 1
+
+    recall = tp/(tp+fn)
+
+    return recall
 
