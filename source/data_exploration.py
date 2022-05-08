@@ -1,7 +1,6 @@
-from utils import dump_to_json
+import itertools
 from collections import defaultdict
 import json
-import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk.stem.wordnet import WordNetLemmatizer
@@ -9,11 +8,11 @@ from nltk.util import ngrams
 from collections import Counter
 import math
 import string
-
-from itertools import combinations
-import ssl
+from utils import grade_by_age, find_age
 
 # In case nltk lemmatizer throws "Resource omw-1.4 not found", uncomment block below.
+# import nltk
+# import ssl
 # try:
 #     _create_unverified_https_context = ssl._create_unverified_context
 # except AttributeError:
@@ -23,61 +22,95 @@ import ssl
 #
 # nltk.download('omw-1.4')
 
-def tokenize_instances (data_dict):
+def tokenize_instances (data_dict, source_curriculums):
 
-    # create dict with tokenized topics and queries per curriculum
+    """
+    Create dict with tokenized topics and queries
+    :param data_dict: dict containing curriculum trees of wizenoze database
+    :param source_curriculums: the subset of curriculums wanted
+    :return: a dict of dicts = {curriculum_name : {grades : [grade1, grade2], topics: [[standard, deviation], [solar, system]]}}
+    """
+
     tokenized_cur = defaultdict(lambda: defaultdict(list))
 
     for cur_id, cur in data_dict.items():
-        for grade_id, grade in cur['grade'].items():
-            for subj_id, subj in grade['subject'].items():
-                for unit_id, unit in subj['unit'].items():
-                    for topic_id, topic in unit['topic'].items():
-                        tokens_topic = word_tokenize(str(topic['label']))
-                        tokenized_cur[cur['label']]['topics'].append(tokens_topic)
-                        for query_id, query_label in topic['query'].items():
-                            if query_label != '':
-                                tokens_query = word_tokenize(str(query_label))
-                                tokenized_cur[cur['label']]['queries'].append(tokens_query)
+        if cur['label'] in source_curriculums:
+            for grade_id, grade in cur['grade'].items():
+                tokenized_cur[cur['label']]['grades'].append(str(grade['label']))
+                for subj_id, subj in grade['subject'].items():
+                    tokenized_cur[cur['label']]['subjects'].append(str(subj['label']))
+                    for unit_id, unit in subj['unit'].items():
+                        tokenized_cur[cur['label']]['units'].append(str(unit['label']))
+                        for topic_id, topic in unit['topic'].items():
+                            tokenized_cur[cur['label']]['topics'].append(word_tokenize(str(topic['label'])))
+                            for query_id, query in topic['query'].items():
+                                if query['label'] != '':
+                                    tokenized_cur[cur['label']]['queries'].append(word_tokenize(str(query["label"])))
 
     return tokenized_cur
 
 
 def descriptive_stats (tokenized_cur):
 
+    """
+    Print out descriptive stats of subset of curricula
+    :param tokenized_cur:
+    """
+
     n_tokens_topic = [len(topic) for cur in tokenized_cur.keys() for topic in tokenized_cur[cur]['topics']]
     n_tokens_query = [len(topic) for cur in tokenized_cur.keys() for topic in tokenized_cur[cur]['queries']]
+
+    n_grades_per_cur = [len(tokenized_cur[cur]['grades']) for cur in tokenized_cur.keys()]
+    n_subjects_per_cur = [len(tokenized_cur[cur]['subjects']) for cur in tokenized_cur.keys()]
+    n_units_per_cur = [len(tokenized_cur[cur]['units']) for cur in tokenized_cur.keys()]
     n_topics_per_cur = [len(tokenized_cur[cur]['topics']) for cur in tokenized_cur.keys()]
     n_queries_per_cur = [len(tokenized_cur[cur]['queries']) for cur in tokenized_cur.keys()]
-    total_n_topics, total_n_queries = sum(n_topics_per_cur), sum(n_queries_per_cur)
 
-    # Mean, max, min number of topics and queries in a curriculum
-    avg_topics_total = round(total_n_topics / len(tokenized_cur.keys()))
-    avg_queries_total = round(total_n_queries / len(tokenized_cur.keys()))
-    avg_queries_per_topic = round(total_n_queries / total_n_topics, 1)
-    min_n_topics, max_n_topics = min(n_topics_per_cur), max(n_topics_per_cur)
-    min_n_queries, max_n_queries = min(n_queries_per_cur), max(n_queries_per_cur)
+    total_n_grades = sum(n_grades_per_cur)
+    total_n_subj = sum(n_subjects_per_cur)
+    total_n_units = sum(n_units_per_cur)
+    total_n_topics = sum(n_topics_per_cur)
+    total_n_queries = sum(n_queries_per_cur)
 
-    # Mean, min and max n of tokens per topic and per query
-    avg_tokens_topic, avg_tokens_query = round(sum(n_tokens_topic)/total_n_topics,1), round(sum(n_tokens_query)/total_n_queries,1)
+    avg_tokens_topic = round(sum(n_tokens_topic)/total_n_topics,1)
+    avg_tokens_query = round(sum(n_tokens_query)/total_n_queries,1)
     max_tokens_topic, min_tokens_topic = max(n_tokens_topic), min(n_tokens_topic)
     max_tokens_query, min_tokens_query = max(n_tokens_query), min(n_tokens_query)
 
+    age_to_grade = grade_by_age([cur for cur in tokenized_cur.keys()])
+
     print('\n%%%%%%% GENERAL STATS %%%%%%%%%')
     print(f'N of CURRICULA: {len(tokenized_cur.keys())}\n'
-          f'N of TOPICS: {total_n_topics}\n'
-          f'N of QUERIES: {total_n_queries}\n')
-    for cur in list(tokenized_cur.keys()):
-        print(f'CURRICULUM {cur}\n'
-              f'N of TOPICS: {len(tokenized_cur[cur]["topics"])}\n'
-              f'N of QUERIES: {len(tokenized_cur[cur]["queries"])}\n')
-    print(f'Mean n of TOPICS per CURRICULUM: {avg_topics_total} ({min_n_topics}-{max_n_topics})\n'
-          f'Mean n of QUERIES per CURRICULUM: {avg_queries_total} ({min_n_queries}-{max_n_queries})\n'
-          f'Mean n of QUERIES per TOPIC: {avg_queries_per_topic}\n'
-          f'Mean n of tokens per TOPIC: {avg_tokens_topic} ({min_tokens_topic}-{max_tokens_topic})\n'
-          f'Mean n of tokens per QUERY: {avg_tokens_query} ({min_tokens_query}-{max_tokens_query})\n')
+          f'N of QUERIES: {total_n_queries}\n'
+          f'Mean n of QUERIES per TOPIC: {round(total_n_queries / total_n_topics, 1)}\n'
+          f'Mean n of TOPICS per UNIT: {round(total_n_topics / total_n_units, 1)}\n'
+          f'Mean n of UNITS per SUBJECT: {round(total_n_units / total_n_subj, 1)}\n'
+          f'Mean n of SUBJECTS per GRADE: {round(total_n_subj / total_n_grades, 1)}\n')
+
+    print(f'Mean n of tokens per QUERY: {avg_tokens_query} ({min_tokens_query}-{max_tokens_query})\n'
+          f'Mean n of tokens per TOPIC: {avg_tokens_topic} ({min_tokens_topic}-{max_tokens_topic})\n')
+
+    for cur_name, cur in list(tokenized_cur.items()):
+        print(f'CURRICULUM {cur_name}\n'
+              f'N of QUERIES: {len(cur["queries"])}\n'
+              f'Mean n of QUERIES per TOPIC: {len(cur["queries"]) / len(cur["topics"])}\n'
+              f'Mean n of TOPICS per UNIT:{len(cur["topics"]) / len(cur["units"])}\n'
+              f'Mean n of UNITS per SUBJECT:{len(cur["units"]) / len(cur["subjects"])}\n'
+              f'Mean n of SUBJECTS per GRADE:{len(cur["subjects"]) / len(cur["grades"])}\n'
+              f'N of GRADES:{len(cur["grades"])}\n'
+              f'Ages:{[find_age(age_to_grade,cur_name,grade) for grade in cur["grades"]]}\n'
+              f'Subjects:{set(cur["subjects"])}\n')
 
 def clean_text (text, remove_punct = True, remove_stop_words = True, lemmatize = True):
+
+    """
+    Pre-process tokenized text
+    :param text: a list of strings (tokenized text)
+    :param remove_punct: if True, remove punctuation
+    :param remove_stop_words: if True, remove stop words
+    :param lemmatize: if True, lemmatize tokens
+    :return: a list of tokens processed according to parameters
+    """
 
     punct = string.punctuation
     stop_words = stopwords.words('english')
@@ -121,35 +154,39 @@ def jaccard_distance(a, b):
 
     return 1.0 * len(a&b)/len(a|b)
 
-def check_n_gram_overlap (tokenized_cur, target_cur = 'Lebanon', source_cur = [], NGRAM = 1):
+def check_n_gram_overlap (tokenized_cur, curriculums, NGRAM = 1, verbose=True):
+
+    """
+    Check n-gram overlap between topics and queries of a curriculum pair. Write out results.
+    :param tokenized_cur: dict with tokenized queries and topics
+    :param target_cur: target curriculum which needs to be matched
+    :param source_cur: the curricula in the database, which form the search space.
+    :param NGRAM: the size of the token gram, default = 1
+    :param verbose: if True, print out results
+    """
 
     n_gram_dict = defaultdict(dict)
 
-    if source_cur == []:
-        source_cur = list(tokenized_cur.keys())
-        source_cur.remove(target_cur)
+    for combi in itertools.combinations(curriculums,2):
 
-    for combi in [(target_cur,source) for source in source_cur]:
         combi_dict = defaultdict(list)
+
         for index, target in enumerate([tokenized_cur[combi[0]]['topics'], tokenized_cur[combi[0]]['queries']]):
-            # print(index)
+
             for instance in target:
-                # print(instance)
+
                 clean_target = clean_text(instance)
-                # print(clean_target)
                 ng_target = list(ngrams(clean_target, NGRAM))
-                # print(ng_target)
+
                 for i, source in enumerate([tokenized_cur[combi[1]]['topics'], tokenized_cur[combi[1]]['queries']]):
+
                     overlap_target = []
-                    # print(i)
+
                     for item in source:
                         clean_source = clean_text(item)
-                        # print(clean_source)
                         ng_source = list(ngrams(clean_source,NGRAM))
-                        # print(ng_source)
                         overlap_ngram = cosine_similarity_ngrams(ng_target,ng_source)
                         # overlap_ngram = jaccard_distance(ng_target,ng_source)
-                        # print(cosine_ngram)
                         overlap_target.append(overlap_ngram)
 
                     if overlap_target == []: max_overlap = 0.0
@@ -161,27 +198,54 @@ def check_n_gram_overlap (tokenized_cur, target_cur = 'Lebanon', source_cur = []
                     else: combi_dict['query-query'].append(max_overlap)
 
         for combi_level in combi_dict.keys():
+
             avg_cosine = sum(combi_dict[combi_level])/len(combi_dict[combi_level])
             n_gram_dict[f'{combi[0]}-{combi[1]}'][combi_level] = round(avg_cosine,3)
 
-    print()
-    print(f'%%%%%%%%%%% {NGRAM}-GRAM OVERLAP %%%%%%%%%%%%%')
-    for cur_combi, cur_combi_dict in n_gram_dict.items():
-        print(cur_combi)
-        print(cur_combi_dict)
+    if verbose:
+        print()
+        print(f'%%%%%%%%%%% {NGRAM}-GRAM OVERLAP %%%%%%%%%%%%%')
+        for cur_combi, cur_combi_dict in n_gram_dict.items():
+            print(cur_combi)
+            print(cur_combi_dict)
+
     char_remove = "[]'"
-    with open(f"../data/{NGRAM}_gram_overlap_{target_cur}_{str(source_cur).strip(char_remove)}.json",'w') as outfile: json.dump(n_gram_dict, outfile)
+    with open(f"../data/{NGRAM}_gram_overlap_{str(curriculums).strip(char_remove)}.json",'w') as outfile: json.dump(n_gram_dict, outfile)
 
 def target_set_stats (target_df):
+
+    """
+    Print out info on new curriculum to be matched. The function assumes the dataframe has a learning objective column.
+    :param target_df: new curriculum in pandas dataframe
+    """
 
     print(f'%%%%%%% TARGET SET %%%%%%%\n'
           f'Total of {len(target_df["learning objective"].unique())} learning objectives to be matched from grades {target_df["grade"].unique()}.\n'
           f'Total of {len(target_df["learning objective"])} matches of learning objective and query/topic.\n'
           f'{target_df["truth"].value_counts().Yes} are positive matches.')
 
+def generate_stats (data, curriculums, check_ngram = False):
 
-def generate_stats (data):
+    """
+    Generate descriptive stats on curriculums
+    :param data: json dict of curriculum trees
+    :param curriculums: subset of curriculums from database
+    """
 
-    tokenized_cur = tokenize_instances(data)
+    tokenized_cur = tokenize_instances(data, curriculums)
     descriptive_stats(tokenized_cur)
-    # check_n_gram_overlap(tokenized_cur)
+    if check_ngram:
+        check_n_gram_overlap(tokenized_cur,curriculums)
+
+def data_distribution (data):
+
+    """
+    Print out curriculum distribution of query pairs data
+    :param data: pandas dataframe with query pairs
+    """
+
+    print(f'Total number of LO: {len(data["TARGET_ID"].unique())}')
+    for cur, group in data.groupby(['TARGET_CURRICULUM']):
+        print(f'Curriculum: {cur}\n'
+              f'N of target LO: {len(group["TARGET_ID"].unique())}\n'
+              f'Proportion: {len(group["TARGET_ID"].unique())/len(data["TARGET_ID"].unique())}')

@@ -1,5 +1,17 @@
 import numpy as np
+import json
 
+def recall_at_k(r, k):
+
+    assert k >= 1
+    topk = np.asarray(r)[:k] != 0
+    rest = np.asarray(r)[k:]
+    tp = np.sum(topk)
+    fn = np.sum(rest)
+    if topk.size != k:
+        raise ValueError('Relevance score length < k')
+    if tp == 0: return 0.0
+    return tp/(tp+fn)
 
 # taken from https://gist.github.com/bwhite/3726239
 def precision_at_k(r, k):
@@ -36,51 +48,125 @@ def r_precision(r):
     return np.mean(r[:z[-1] + 1])
 # finish taken from https://gist.github.com/bwhite/3726239
 
+def topn_recall(predictions, n):
 
-def eval_ranking (predictions, gold, query_copies, verbose = False):
+    tp, fn = 0, 0
+    for pred_name, pred_group in predictions.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
+        gold = pred_group['GOLD'].tolist()
+        tp += np.sum(gold[:n])
+        fn += np.sum(gold[n:])
+    recall = tp / (tp + fn)
 
-    ranks = []
-    r_ranks= []
-    # gold[["TARGET_ID", "SOURCE_ID"]] = gold[["TARGET_ID", "SOURCE_ID"]].astype(str)
-    # print(predictions.isnull().any())
+    return recall
+
+def mean_recall_at_k(rs,k):
+
+   return np.mean([recall_at_k(r,k) for r in rs])
+
+def mean_precision_at_k(rs,k):
+
+    return np.mean([precision_at_k(r,k) for r in rs])
+
+
+def add_gold_column (predictions, gold, query_copies):
+
+    correct = []
 
     for pred_name, pred_group in predictions.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
+
         pred_dict = pred_group.to_dict(orient='list')
         # if pred_group.isnull().values.any():
         #     print(pred_dict)
+
         for gold_name, gold_group in gold.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
+
             if gold_name == pred_name:
+
                 gold_dict = gold_group.to_dict(orient='list')
                 gold_queries = gold_dict['SOURCE_ID']
-                correct = []
+
                 for i in range(0,len(pred_dict['SOURCE_ID'])):
+
                     if pred_dict['SOURCE_ID'][i] in gold_queries:
                         correct.append(1)
                     elif query_copies[str(pred_dict['SOURCE'][i]).lower()]:
                         if set(query_copies[str(pred_dict['SOURCE'][i]).lower()]).intersection(set(gold_queries)):
                             correct.append(1)
+                        else:
+                            correct.append(0)
                     else: correct.append(0)
-                ranks.append(correct)
-                r_ranks.append(correct[:len(gold_queries)]) # k is conditioned to R
-                break
 
-    map = mean_average_precision(ranks)
-    r_p = np.mean([r_precision(r) for r in r_ranks])
+    predictions['GOLD'] = correct
+
+    return predictions
+
+
+def eval_ranking_per_cur (predictions, k, verbose = False):
+
+    ranks = []
+
+    for pred_name, pred_group in predictions.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
+
+        correct = pred_group['GOLD'].tolist()
+        ranks.append(correct)
+
+    # map = mean_average_precision(ranks)
+    recall = mean_recall_at_k(ranks,k)
+    precision = mean_precision_at_k(ranks,k)
+    # r_p = np.mean([r_precision(r) for r in ranks])
     mrr = mean_reciprocal_rank(ranks)
 
     if verbose: print(f'Target curriculum: {list(predictions["TARGET_CURRICULUM"])[0]}\n'
-                      f'Mean Average Precision (MAP): {round(map,3)}\n'
-                      f'R-precision: {round(r_p,3)}\n'
+                      #f'Mean Average Precision (MAP): {round(map,3)}\n'
+                      #f'R-precision: {round(r_p,3)}\n'
+                      f'Precision@{k}: {precision}\n'
+                      f'Recall@{k}: {recall}\n'
                       f'Mean Reciprocal Rank (MRR): {round(mrr,3)}\n'
                       f'Support: {len(ranks)}\n\n')
 
-    return {'map': map,
-            'rp': r_p,
+    return {#'map': map,
+            #'rp': r_p,
+            'r': recall,
+            'p': precision,
             'mrr': mrr,
             'support': len(ranks)}
 
 
-def eval_previous_study (ann, target_cur,target_grade, verbose = True):
+def eval_ranking (predictions,k,eval_filepath):
+
+    eval = dict()
+
+    for cur_name, cur_predictions in predictions.groupby(['TARGET_CURRICULUM']):
+        eval_dict = eval_ranking_per_cur(cur_predictions,k,verbose=True)
+        eval[cur_name] = eval_dict
+
+    #map_values = [eval_dict['map'] for eval_dict in list(eval.values())]
+    #rp_values = [eval_dict['rp'] for eval_dict in list(eval.values())]
+    p_values = [eval_dict['p'] for eval_dict in list(eval.values())]
+    r_values = [eval_dict['r'] for eval_dict in list(eval.values())]
+    mrr_values = [eval_dict['mrr'] for eval_dict in list(eval.values())]
+
+    #w_map_values = [eval_dict['map'] * eval_dict['support'] for eval_dict in list(eval.values())]
+    #w_rp_values = [eval_dict['rp'] * eval_dict['support'] for eval_dict in list(eval.values())]
+    w_p_values = [eval_dict['p'] * eval_dict['support'] for eval_dict in list(eval.values())]
+    w_r_values = [eval_dict['r'] * eval_dict['support'] for eval_dict in list(eval.values())]
+    w_mrr_values = [eval_dict['mrr'] * eval_dict['support'] for eval_dict in list(eval.values())]
+
+    eval['macro-avg'] = {#'map': sum(map_values) / len(map_values),
+                         #'rp': sum(rp_values) / len(rp_values),
+                         'p@k': sum(p_values) / len(p_values),
+                         'r@k': sum(r_values) / len(r_values),
+                         'mrr': sum(mrr_values) / len(mrr_values)}
+    eval['micro-avg'] = {#'map': sum(w_map_values) / len(set(list(predictions['TARGET_ID']))),
+                         #'rp': sum(w_rp_values) / len(set(list(predictions['TARGET_ID']))),
+                         'p@k': sum(w_p_values) / len(set(list(predictions['TARGET_ID']))),
+                         'r@k': sum(w_r_values)/ len(set(list(predictions['TARGET_ID']))),
+                         'mrr': sum(w_mrr_values) / len(set(list(predictions['TARGET_ID'])))}
+
+    with open(eval_filepath, 'w') as outfile:
+        json.dump(eval, outfile)
+
+def eval_previous_study (ann, target_cur, target_grade, verbose = True):
 
     ranks = []
     by_lo = ann.groupby(['learning objective','grade'])
@@ -150,24 +236,4 @@ def evaluate_dev_pre_study (pred, ann, parameters_basepath, query_copies, verbos
         print(
         f'Number of matches predicted in preliminarity study which are also predicted by this system: {true_positives + false_positives}\n'
         f'Out of these, proportion of correctly predicted matches: {precision}\n')
-
-def topn_recall(predictions, gold, query_copies):
-
-    tp, fn = 0, 0
-    for pred_name, pred_group in predictions.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
-        pred_dict = pred_group.to_dict(orient='list')
-        for gold_name, gold_group in gold.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
-            if gold_name == pred_name:
-                gold_dict = gold_group.to_dict(orient='list')
-                for i in range(0,len(gold_dict['SOURCE_ID'])):
-                    if gold_dict['SOURCE_ID'][i] in pred_dict['SOURCE_ID']:
-                        tp += 1
-                    elif query_copies[str(gold_dict['SOURCE'][i]).lower()]:
-                        if set(query_copies[str(gold_dict['SOURCE'][i]).lower()]).intersection(set(pred_dict['SOURCE_ID'])):
-                            tp += 1
-                    else: fn += 1
-
-    recall = tp/(tp+fn)
-
-    return recall
 

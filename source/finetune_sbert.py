@@ -27,7 +27,11 @@ class QueryLinks:
             doc_sums_nsent = str(line["docSumsNsent"])
 
             self.queries[query_id] = query_term
-            self.docs[query_id] = query_term + ' ' + doc_titles + ' ' + doc_sums_1sent
+            # self.docs[query_id] = query_term + ' ' + doc_titles
+            # self.docs[query_id] = query_term + ' ' + doc_titles + ' ' + doc_sums_1sent
+            # self.docs[query_id] = query_term + ' ' + doc_titles + ' ' + doc_sums_nsent
+            # self.docs[query_id] = query_term + doc_sums_nsent
+            self.docs[query_id] = query_term + doc_sums_1sent
 
     def get_document(self, doc_id: str) -> str:
         return self.docs[doc_id]
@@ -42,6 +46,7 @@ class QueryLinks:
 
 
 class TripletsDataset(IterableDataset):
+
     def __init__(
             self, model, query_links: QueryLinks, triplets: List[Dict[str, str]]
     ):
@@ -68,14 +73,17 @@ class TripletsDataset(IterableDataset):
 
 def fine_tune_bert (fine_tune_args):
 
-    TRAIN_FILEPATH = '../data/train_query_pairs.csv'
-    DEV_FILEPATH = '../data/dev_query_pairs.csv'
-    TRAIN_TRIPLETS_FILE = '../data/train_triplets.csv'
-    DEV_TRIPLETS_FILE = '../data/dev_triplets.csv'
-    DATA_DICT_FILE = '../data/data_dict.json'
-    QUERY_FILE = '../data/query_info.csv'
-    MODEL_OUTPUT_PATH = '../models/query2query-SBERT'
+    TRAIN_FILEPATH = 'data/thesis/train_query_pairs_7.csv'
+    DEV_FILEPATH = 'data/thesis/dev_query_pairs_7.csv'
+    TRAIN_TRIPLETS_FILE = 'data/thesis/train_triplets.csv'
+    DEV_TRIPLETS_FILE = 'data/thesis/dev_triplets.csv'
+    DATA_DICT_FILE = 'data/thesis/data_dict.json'
+    QUERY_FILE = 'data/thesis/query_info.csv'
+    MODEL_OUTPUT_PATH = 'model_save/paraphrase-sbert-label-1sums-rankingloss-nodup_7'
+    DOC_SUMS = 'data/thesis/doc_sums.csv'
+    source_curriculums = 'ICSE,CBSE,Cambridge,English,CCSS,NGSS,Scotland'
 
+    # generate triplets
     if not os.path.isfile(TRAIN_TRIPLETS_FILE):
         generate_triplets_file(TRAIN_FILEPATH, TRAIN_TRIPLETS_FILE)
     if not os.path.isfile(DEV_TRIPLETS_FILE):
@@ -86,6 +94,7 @@ def fine_tune_bert (fine_tune_args):
     with open(DEV_TRIPLETS_FILE) as f:
         test_triplets: List[Dict[str, str]] = [line for line in csv.DictReader(f, delimiter='\t')]
 
+    # generate query info file
     if not os.path.isfile(QUERY_FILE):
 
         all_queries = set()
@@ -96,15 +105,17 @@ def fine_tune_bert (fine_tune_args):
                 all_queries.add(triplet_dict['pos_id'])
                 all_queries.add(triplet_dict['neg_id'])
 
-        doc_sums_df = pd.read_csv('../data/doc_sums.csv', sep='\t', dtype={'queryId': str})
+        doc_sums_df = pd.read_csv(DOC_SUMS, sep='\t', dtype={'queryId': str})
         doc_sums = defaultdict(list)
         for query_id, docs in doc_sums_df.groupby(['queryId']):
             doc_sums[query_id] = [doc_sum for doc_sum in list(docs['sumText'])]
 
         generate_query_file(DATA_DICT_FILE, QUERY_FILE, all_queries, doc_sums)
 
+    # generate query links
     query_links = QueryLinks.from_file(QUERY_FILE)
 
+    # generate triplets for val set
     test_corpus: Dict[str, str] = {}
     test_queries: Dict[str, str] = {}
     test_rel_docs: Dict[str, Set[str]] = defaultdict(set)
@@ -129,6 +140,7 @@ def fine_tune_bert (fine_tune_args):
         if qid in test_rel_docs and len(test_rel_docs[qid]) > 0:
             _query_ids.append(qid)
 
+    # model training
     BASE_MODEL = "sentence-transformers/paraphrase-MiniLM-L6-v2"
     # word_embedding_model = models.Transformer(BASE_MODEL, max_seq_length=350)
     # pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
