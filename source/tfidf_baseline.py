@@ -26,8 +26,11 @@ def tfidf_match (target_cur, source_curriculums, target_queries, k):
             resp = response.json()
             scores = []
             for match in resp:
-                if match['queryId'] != tq[0] and len(scores) < k:
-                    scores.append((match['name'].strip(), match['queryId'], match['path'].strip(), 1))
+                if match['queryId'] != tq[0] and match['curriculumMetadata']['CURRICULUM']['name'] != target_cur and len(scores) < k:
+                    scores.append((match['name'].strip(),
+                                   match['queryId'],
+                                   match['curriculumMetadata']['CURRICULUM']['name'] + '>' + match['path'].strip(),
+                                   1))
             matches[tq[0]]['scores'] = scores
         else:
             print(f'{response.status_code} response status for query {tq[0]}')

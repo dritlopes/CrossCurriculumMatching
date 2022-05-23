@@ -13,6 +13,7 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk import pos_tag
 import os
 
+
 def read_in_dump (dump_filepath):
 
     """
@@ -43,7 +44,7 @@ def read_in_dump (dump_filepath):
 
     return df
 
-def dump_to_json (filepath):
+def dump_to_json (filepath, DATA_DIR):
 
     """
     Create dictionary of all curriculum trees from the dumpfile for quicker lookup
@@ -81,11 +82,11 @@ def dump_to_json (filepath):
             'topic'][row['TOPICID']]['query'][row['QUERYID']]['docs'][row['RESULTURL']]['title'] = row['RESULTTITLE']
         # web pages 'title' : resulttitle}}}}}}
 
-    with open('../data/data_dict.json','w') as outfile:
+    with open(f'{DATA_DIR}/data_dict.json','w') as outfile:
         json.dump(data_dict, outfile)
 
 
-def find_query_copies (data_dict):
+def find_query_copies (data_dict, DATA_DIR):
 
     """
     Find which query ID's are copies of each other. Query ID's are considered copies when they have the same uncased text
@@ -95,7 +96,7 @@ def find_query_copies (data_dict):
     """
 
     query_docs = list()
-    query_copies = defaultdict(set)
+    query_copies = defaultdict(list)
 
     for cur_id, cur in data_dict.items():
         for grade_id, grade in cur['grade'].items():
@@ -122,13 +123,18 @@ def find_query_copies (data_dict):
     for i in range(0,len(query_docs)):
         for query in query_docs[i+1:]:
             if query_docs[i][1] == query[1] and query_docs[i][2] == query[2]:
-                query_copies[query[1]].add(query[0])
-                query_copies[query[1]].add(query_docs[i][0])
+                if query[0] not in query_copies[query[1]]:
+                    query_copies[query[1]].append(query[0])
+                if query_docs[i][0] not in query_copies[query[1]]:
+                    query_copies[query[1]].append(query_docs[i][0])
+
+    with open(f'{DATA_DIR}/query_copies.json','w') as outfile:
+        json.dump(query_copies, outfile)
 
     return query_copies
 
 
-def generate_shared_docs_set (dump_filepath, included_cur, query_copies, verbose = False):
+def generate_shared_docs_set (dump_filepath, included_cur, query_copies, DATA_DIR = '../data' , verbose = False):
 
     """
     Generate data of automatically annotated query pairs. If two queries from different curricula share at least one pinned document,
@@ -165,6 +171,7 @@ def generate_shared_docs_set (dump_filepath, included_cur, query_copies, verbose
 
                     # TARGET AND SOURCE ARE NOT FROM THE SAME CURRICULUM
                     if group['CURRICULUM'][combi[0]] != group['CURRICULUM'][combi[1]]:
+
                         # SOME CURRICULA ARE NOT INCLUDED
                         if group['CURRICULUM'][combi[0]] in included_cur and group['CURRICULUM'][combi[1]] in included_cur:
 
@@ -198,7 +205,7 @@ def generate_shared_docs_set (dump_filepath, included_cur, query_copies, verbose
     df = pd.DataFrame(eval_dict)
     df = df.drop_duplicates(subset=['TARGET_ID', 'SOURCE_ID'])  # WHEN TARGET AND SOURCE SHARE MORE THAN ONE WEB PAGE
     df = df.sort_values(by=['TARGET_CURRICULUM','TARGET_ID'])
-    df.to_csv(f"../data/query_pairs_{included_cur}.csv",sep="\t",index=False)
+    df.to_csv(f"{DATA_DIR}/query_pairs_{included_cur}.csv",sep="\t",index=False)
 
     if verbose:
         print('\n####### Set of queries that share webpages #######')
@@ -231,6 +238,7 @@ def grade_by_age (included_cur, age_filepath = '../data/MASTER Reading levels an
             group = group.to_dict(orient='list')
             for i in range(0,len(group['Column1.nodes.description'])):
                 cur = group['Column1.description'][i]
+                curid = group['Column1.curriculumId'][i]
                 gradeid = group['Column1.nodes.nodeId'][i]
                 grade = group['Column1.nodes.description'][i]
                 if group['Column1.description'][i] == 'CSTA':
@@ -242,8 +250,9 @@ def grade_by_age (included_cur, age_filepath = '../data/MASTER Reading levels an
                         age_key = re.sub(r', *[A-Z]* *[1-5]*', '', age_key)
 
                     age_to_grade[int(age_key)].append({'CURRICULUM': cur,
-                                                    'GRADEID': str(gradeid).strip('.0'),
-                                                    'GRADE': grade})
+                                                       'CURRICULUMID': str(curid),
+                                                        'GRADEID': str(gradeid).strip('.0'),
+                                                        'GRADE': grade})
 
     return age_to_grade
 
@@ -262,7 +271,7 @@ def find_age (age_to_grade,curriculum,grade):
     if grade.startswith(curriculum): grade = grade.replace(curriculum+' ', '')
     for age, grades in age_to_grade.items():
         for dict in grades:
-            if curriculum == dict['CURRICULUM'] and (grade == dict['GRADE'] or grade == dict['GRADEID']):
+            if (curriculum == dict['CURRICULUM'] or curriculum == dict['CURRICULUMID']) and (grade == dict['GRADE'] or grade == dict['GRADEID']):
                 target_age = age
                 break
 
@@ -275,7 +284,7 @@ def find_age (age_to_grade,curriculum,grade):
     return target_age
 
 
-def generate_doc_sums (data_dict, source_curriculums):
+def generate_doc_sums (data_dict, source_curriculums, DATA_DIR):
 
     """
     Write out file with summary of documents per query.
@@ -284,7 +293,7 @@ def generate_doc_sums (data_dict, source_curriculums):
     """
 
     start_time = time.perf_counter()
-    with open('../data/doc_sums.csv','w') as out:
+    with open(f'{DATA_DIR}/doc_sums.csv','w') as out:
         out.write(f'queryId\turl\tsumText\n')
 
         for cur_id, cur in data_dict.items():
@@ -312,8 +321,22 @@ def generate_doc_sums (data_dict, source_curriculums):
     end_time = time.perf_counter()
     print(f'It took {end_time - start_time:0.4f} seconds to get all summary texts wtih API calls')
 
+def target_subset(target_data, n):
 
-def generate_train_test(target_data, random_seed = 42, verbose=False):
+    target_sub = defaultdict(list)
+    percent = {'ICSE': 39, 'CBSE': 37, 'Cambridge': 11, 'English': 5, 'NGSS': 2, 'CCSS': 2, 'Scotland': 1}
+    cur = target_data['TARGET_CURRICULUM'][0]
+    cur_n = int((n * percent[cur])/100)
+
+    for n in range(cur_n):
+        i = random.randint(0,len(target_data['TARGET']))
+        for key in target_data.keys():
+            target_sub[key].append(target_data[key][i])
+
+    return target_sub
+
+
+def generate_train_test(target_data, DATA_DIR, random_seed = 42, verbose=False):
 
     """
     Given dataset of query pairs, split into train, dev and test and write them out.
@@ -326,9 +349,9 @@ def generate_train_test(target_data, random_seed = 42, verbose=False):
     data_dev = pd.DataFrame()
     data_test = pd.DataFrame()
 
-    filepaths = [f'../data/train_query_pairs_{random_seed}.csv',
-                 f'../data/dev_query_pairs_{random_seed}.csv',
-                 f'../data/test_query_pairs_{random_seed}.csv']
+    filepaths = [f'{DATA_DIR}/train_query_pairs_{random_seed}.csv',
+                 f'{DATA_DIR}/dev_query_pairs_{random_seed}.csv',
+                 f'{DATA_DIR}/test_query_pairs_{random_seed}.csv']
 
     train_ratio, test_ratio, val_ratio = 0.7, 0.2, 0.1
     for cur_name, cur_group in target_data.groupby(['TARGET_CURRICULUM']):
@@ -365,24 +388,48 @@ def generate_train_test(target_data, random_seed = 42, verbose=False):
                 print(f"{cur}: {round(p, 4)}\n")
 
 
-def generate_test_lebanon (filepath_to_excel):
+def generate_test_lebanon (filepath_to_excel, output_file):
 
     """
     Unify grade excel sheets into one pandas dataframe with Lebanon learning objectives
     :param filepath_to_excel: excel with pre-study on Lebanon
     """
 
-    # TODO test this code after changes
     target_data = pd.DataFrame()
-    for grade in ['Elementary - Year 6', 'Intermediate - Year 7', 'Intermediate - Year 8', 'Secondary - Year 10']:
-        target_grade = pd.read_excel(filepath_to_excel, grade)
-        target_grade["grade"] = grade
+    for grade in [('lebanon_grade6 txt','Elementary - Year 6'),
+                  ('lebanon_grade7 txt (1)','Intermediate - Year 7'),
+                  #('lebanon_grade8 txt (1)','Intermediate - Year 8'),
+                  ('lebanon_grade10 txt (1)','Secondary - Year 10')]:
+        target_grade = pd.read_excel(filepath_to_excel, grade[0])
+        target_grade["TARGET_GRADE"] = grade[1]
+        target_grade = target_grade.rename(columns={'Topic/Queries from CT': 'SOURCE',
+                                                  'Topics/Queries from CT': 'SOURCE',
+                                                  'topic/query': 'SOURCE',
+                                                  'learning objective': 'TARGET',
+                                                  'path': 'SOURCE_PATH',
+                                                  'queryId': 'SOURCE_ID',
+                                                  'Lebanon Learning Objective': 'TARGET',
+                                                  'Matching to the learning Objective (Yes/No)': 'GOLD',
+                                                  'curriculumId': 'SOURCE_CURRICULUM'})
         target_data = pd.concat([target_data,target_grade],ignore_index=True)
-    target_data = target_data.rename(columns={'Topic/Queries from CT': 'topic/query',
-                                               'Topics/Queries from CT': 'topic/query',
-                                               'Lebanon Learning Objective': 'learning objective',
-                                               'Matching to the learning Objective (Yes/No)': 'truth'})
-    target_data.to_csv(f'../data/test_Lebanon.csv', index=False)
+
+    target_data['TARGET_CURRICULUM'] = 'Lebanon'
+    target_data['TARGET_PATH'] = target_data['TARGET_GRADE'].apply(lambda x : f'Lebanon>{x}> > > ')
+    # only save rows where gold is 'yes' and qualifier is 'query'
+    target_data = target_data[target_data['qualifier'] == 'QUERY']
+    target_data = target_data[target_data['GOLD'].isin(['Yes','YEs','yes'])]
+    target_data = target_data.drop(['nodeId','Explanation','Comments on why not matching'],axis=1)
+    target_data['SOURCE_ID'] = target_data['SOURCE_ID'].apply(lambda x:int(x))
+
+    target_ids = []
+    id = 0
+    for target, group in target_data.groupby(['TARGET','TARGET_GRADE'], sort=False):
+        for i in range(len(group)): target_ids.append(id)
+        id += 1
+    assert len(target_ids) == len(target_data)
+    target_data['TARGET_ID'] = target_ids
+
+    target_data.to_csv(output_file, index=False, sep='\t')
 
 
 def generate_triplets_file (FILEPATH, TRIPLETS_FILE):
@@ -491,34 +538,36 @@ def generate_query_file(DATA_DICT_FILE, QUERY_FILE, queries, doc_sums):
                 f'{query_dict["id"]}\t{query_dict["label"]}\t{query_dict["doc_titles"]}\t{query_dict["doc_sums_1sent"]}'
                 f'\t{query_dict["doc_sums_nsent"]}\n')
 
-def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade):
+
+def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade, curriculums):
 
     with open(data_dict_filepath) as json_file:
         data = json.load(json_file)
 
     rows = []
     for cur_id, cur in data.items():
-        for grade_id, grade in cur['grade'].items():
-            for subject_id, subject in grade['subject'].items():
-                for unit_id, unit in subject['unit'].items():
-                    for topic_id, topic in unit['topic'].items():
-                        for query_id, query in topic['query'].items():
-                            label = query['label']
-                            if label == '': label = topic['label']
-                            query_dict = {'id': query_id,
-                                          'query_term': label,
-                                          'topic': topic['label'],
-                                          'subject': subject['label'],
-                                          'grade': subject['label'],
-                                          'curriculum': cur['label'],
-                                          'doc_titles': ' '.join(
-                                              [doc_info['title'] for doc_info in query['docs'].values() if
-                                               doc_info['pin']]),
-                                          'doc_sums_1sent': '',
-                                          'doc_sums_nsent': ''}
+        if cur['label'] in curriculums:
+            for grade_id, grade in cur['grade'].items():
+                for subject_id, subject in grade['subject'].items():
+                    for unit_id, unit in subject['unit'].items():
+                        for topic_id, topic in unit['topic'].items():
+                            for query_id, query in topic['query'].items():
+                                label = query['label']
+                                if label == '': label = topic['label']
+                                query_dict = {'id': query_id,
+                                              'query_term': label.strip(),
+                                              'topic': topic['label'].strip(),
+                                              'subject': subject['label'].strip(),
+                                              'grade': grade['label'].strip(),
+                                              'curriculum': cur['label'].strip(),
+                                              'doc_titles': ' '.join(
+                                                  [doc_info['title'].strip() for doc_info in query['docs'].values() if
+                                                   doc_info['pin']]),
+                                              'doc_sums_1sent': '',
+                                              'doc_sums_nsent': ''}
 
-                            age = find_age(age_to_grade, cur['label'], grade['label'])
-                            query_dict['age'] = age
+                                age = find_age(age_to_grade, cur['label'], grade['label'])
+                                query_dict['age'] = age
 
                                 # Including organic documents
                                 # query_dict = {'id': query_id,
@@ -528,32 +577,37 @@ def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade
                                 #               'doc_sums_1sent': '',
                                 #               'doc_sums_nsent': ''}
 
-                            if doc_sums[query_id]:
-                                doc_sums_1sent = []
-                                doc_sums_nsent = []
-                                for sum in doc_sums[query_id]:
-                                    sents = sent_tokenize(sum)
-                                    doc_sums_1sent.append(sents[0])
-                                    tags_label = pos_tag(word_tokenize(label))
-                                    nouns = [word for word, pos in tags_label if pos.startswith('NN')]
-                                    for sent in sents:
-                                        tokens = word_tokenize(sent)
-                                        for token in tokens:
-                                            if token in nouns and sent not in doc_sums_nsent:
-                                                doc_sums_nsent.append(sent)
-                                query_dict['doc_sums_1sent'] = ' '.join(doc_sums_1sent)
-                                query_dict['doc_sums_nsent'] = ' '.join(doc_sums_nsent)
+                                if doc_sums[query_id]:
+                                    doc_sums_1sent = []
+                                    doc_sums_nsent = []
+                                    for sum in doc_sums[query_id]:
+                                        sents = sent_tokenize(sum)
+                                        doc_sums_1sent.append(sents[0])
+                                        tags_label = pos_tag(word_tokenize(label))
+                                        nouns = [word for word, pos in tags_label if pos.startswith('NN')]
+                                        for sent in sents:
+                                            tokens = word_tokenize(sent)
+                                            for token in tokens:
+                                                if token in nouns and sent not in doc_sums_nsent:
+                                                    doc_sums_nsent.append(sent)
+                                    query_dict['doc_sums_1sent'] = ' '.join(doc_sums_1sent).strip()
+                                    query_dict['doc_sums_nsent'] = ' '.join(doc_sums_nsent).strip()
 
-                            rows.append(query_dict)
+                                for key, v in query_dict.items():
+                                    new = v.replace('\n', '')
+                                    new = new.replace('\t', '')
+                                    query_dict[key] = new
+
+                                rows.append(query_dict)
 
     with open(info_filepath, 'w', encoding="utf-8") as out:
-        headers = ['id','query_term','doc_titles','doc_sums_1sent','doc_sums_nsents','topic','subject','grade','age']
+        headers = ['query_id', 'query_term', 'doc_titles', 'doc_sums_1sent', 'doc_sums_nsents', 'topic', 'subject',
+                   'grade',
+                   'age', 'curriculum']
         headers = '\t'.join(headers) + '\n'
-        # headers = headers.encode('UTF-8',errors='ignore')
-        # headers = headers.decode('UTF-8')
         out.write(headers)
         for query_dict in rows:
             out.write(
                 f'{query_dict["id"]}\t{query_dict["query_term"]}\t{query_dict["doc_titles"]}\t{query_dict["doc_sums_1sent"]}'
                 f'\t{query_dict["doc_sums_nsent"]}\t{query_dict["topic"]}\t{query_dict["subject"]}\t{query_dict["grade"]}'
-                f'\t{query_dict["age"]}\n')
+                f'\t{query_dict["age"]}\t{query_dict["curriculum"]}\n')

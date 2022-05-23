@@ -4,8 +4,8 @@
 
 #Set job requirements
 #SBATCH -N 1
-#SBATCH -t 01:00:00
-#SBATCH -p gpu_short
+#SBATCH -t 100:00:00
+#SBATCH -p gpu
 #SBATCH --gpus-per-node=1
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=adrielli.drica@gmail.com

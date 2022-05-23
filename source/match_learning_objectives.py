@@ -43,8 +43,8 @@ def get_target_features (target, features, age_to_grade, uncased):
 
         target_features.append(target_dict)
 
-    print(f'N of target learning objetives: {len(target_features)}')
-    warnings.warn(f'N of target learning objetives: {len(target_features)}')
+    print(f'N of target learning objectives: {len(target_features)}')
+    # warnings.warn(f'N of target learning objetives: {len(target_features)}')
 
     return target_features
 
@@ -100,7 +100,7 @@ def get_source_features (source, features, age_to_grade, uncased, doc_sums):
                                             if uncased: sentence = sentence.lower()
                                             sentences.append(sentence)
                                         elif 'doc_sum_nsents' in features:
-                                            tags_label = pos_tag(word_tokenize(source_dict['label']))
+                                            tags_label = pos_tag(word_tokenize(source_dict['query']))
                                             nouns = [word for word, pos in tags_label if pos.startswith('NN')]
                                             for sent in sents:
                                                 tokens = word_tokenize(sent)
@@ -113,12 +113,12 @@ def get_source_features (source, features, age_to_grade, uncased, doc_sums):
                             source_features.append(source_dict)
 
     print(f'N of source queries: {len(source_features)}')
-    warnings.warn(f'N of source queries: {len(source_features)}')
+    # warnings.warn(f'N of source queries: {len(source_features)}')
 
     return source_features
 
 
-def average_embeddings (model, model_name, source_features, queries):
+def average_embeddings (model, source_features, queries):
 
     source_encodings = []
 
@@ -128,27 +128,30 @@ def average_embeddings (model, model_name, source_features, queries):
 
         if 'doc_titles' in source_features[0].keys():
             query_doc_titles = source_features[i]['doc_titles']
+            if query_doc_titles == []: query_doc_titles = ['']
             # average the encodings only if doc titles is not an empty list (if at least one result is pinned)
-            if query_doc_titles != []:
-                if model_name == '../models/cc.en.300.bin':
-                    title_encodings = []
-                    for title in query_doc_titles:
-                        title_encodings.append(model.get_sentence_vector(title.replace('\n','')))
-                else:
-                    title_encodings = model.encode(query_doc_titles, convert_to_tensor=True)
-                title_encodings = torch.mean(title_encodings, dim=0)
-                query_encoding = torch.stack((query_encoding,title_encodings))
+            # if model_name.endswith('cc.en.300.bin'):
+            #     title_encodings = []
+            #     for title in query_doc_titles:
+            #         title_encodings.append(model.get_sentence_vector(title.replace('\n','')))
+            # else:
+            title_encodings = model.encode(query_doc_titles, convert_to_tensor=True)
+            title_encodings = torch.mean(title_encodings, dim=0)
+            query_encoding = torch.stack((query_encoding, title_encodings))
 
         if 'doc_sums' in source_features[0].keys():
             query_doc_sums = source_features[i]['doc_sums']
-            if query_doc_sums != []:
-                if model_name == '../models/cc.en.300.bin':
-                    sum_encodings = []
-                    for sum in query_doc_sums:
-                        sum_encodings.append(model.get_sentence_vector(sum.replace('\n','')))
-                else:
-                    sum_encodings = model.encode(query_doc_sums, convert_to_tensor=True)
-                sum_encodings = torch.mean(sum_encodings,dim=0)
+            if query_doc_sums == []: query_doc_sums = ['']
+            # if model_name.endswith('cc.en.300.bin'):
+            #     sum_encodings = []
+            #     for sum in query_doc_sums:
+            #         sum_encodings.append(model.get_sentence_vector(sum.replace('\n','')))
+            # else:
+            sum_encodings = model.encode(query_doc_sums, convert_to_tensor=True)
+            sum_encodings = torch.mean(sum_encodings,dim=0)
+            if query_encoding.size()[0] == 2:
+                query_encoding = torch.stack((query_encoding[0],query_encoding[1],sum_encodings))
+            else:
                 query_encoding = torch.stack((query_encoding, sum_encodings))
 
         query_encoding = torch.mean(query_encoding, dim=0)
@@ -166,24 +169,26 @@ def get_encodings (source_features, target_features, model_filepath):
 
         source_queries = [source_dict.pop('query') for source_dict in source_features]
         target_queries = [target_dict.pop('query') for target_dict in target_features]
-        fasttext.util.download_model('en', if_exists='ignore')
+        # fasttext.util.download_model('en', if_exists='ignore')
         model = fasttext.load_model(model_filepath)
         source_encodings, target_encodings = [], []
         for label in source_queries: source_encodings.append(model.get_sentence_vector(label))
         for label in target_queries: target_encodings.append(model.get_sentence_vector(label))
-        if 'doc_titles' in source_features[0].keys() or 'doc_sums' in source_features[0].keys():
-            source_encodings = average_embeddings(model, model_filepath, source_features, source_encodings)
+        # if 'doc_titles' in source_features[0].keys() or 'doc_sums' in source_features[0].keys():
+        #     source_encodings = average_embeddings(model, model_filepath, source_features, source_encodings)
 
     else:
         # queries
         source_queries = [source_dict.pop('query') for source_dict in source_features]
         target_queries = [target_dict.pop('query') for target_dict in target_features]
         model = SentenceTransformer(model_filepath)
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        model.to(device)
         source_encodings = model.encode(source_queries,convert_to_tensor=True)
         target_encodings = model.encode(target_queries,convert_to_tensor=True)
         # doc info
         if 'doc_titles' in source_features[0].keys() or 'doc_sums' in source_features[0].keys():
-            source_encodings = average_embeddings(model, model_filepath, source_features, source_encodings)
+            source_encodings = average_embeddings(model, source_features, source_encodings)
         # topic
         if 'topic' in source_features[0].keys() and 'topic' in target_features[0].keys():
             source_topics = [source_dict.pop('topic') for source_dict in source_features]
@@ -203,21 +208,22 @@ def get_encodings (source_features, target_features, model_filepath):
             vec = CountVectorizer(token_pattern=r'(?u)\b\w+\b')
             dimensions = ['4 5 6 7 8 9 10 11 12 13 14 15 16 17 18']
             vec.fit(dimensions)
-            source_age = vec.transform([source_dict.pop('age') for source_dict in source_features])
-            target_age = vec.transform([target_dict.pop('age') for target_dict in target_features])
+            source_age = vec.transform([str(source_dict.pop('age')) for source_dict in source_features])
+            target_age = vec.transform([str(target_dict.pop('age')) for target_dict in target_features])
             # convert one-hot to dense vectors
             embedding_layer = nn.Embedding(len(dimensions[0].split(' ')), len(dimensions[0].split(' ')))
-            print(torch.stack([torch.from_numpy(age.toarray()) for age in source_age]).shape)
             source_age = torch.squeeze(torch.stack([torch.from_numpy(age.toarray()) for age in source_age]))
-            print(source_age.shape)
-            target_age = torch.squeeze(torch.stack([torch.from_numpy(age.toarray()) for age in target_age]))
+            target_age = torch.squeeze(torch.stack([torch.from_numpy(age.toarray()) for age in target_age]),dim=1)
             source_age_embeddings = embedding_layer(source_age)
             target_age_embeddings = embedding_layer(target_age)
             source_age_encodings = torch.mean(source_age_embeddings, -1)
             target_age_encodings = torch.mean(target_age_embeddings, -1)
             source_encodings = torch.concat((source_encodings,source_age_encodings),dim=-1)
             target_encodings = torch.concat((target_encodings,target_age_encodings),dim=-1)
-            print(source_encodings.shape, target_encodings.shape)
+
+        source_encodings = source_encodings.detach().cpu().numpy()
+        target_encodings = target_encodings.detach().cpu().numpy()
+
 
     end_time = time.perf_counter()
     print(f"It took {end_time - start_time:0.4f} seconds to encode queries")
@@ -310,7 +316,7 @@ def classifier_predict(model_filepath, loader):
 
         if step % 50 == 0 and not step == 0:
             elapsed = format_time(time.time() - t0)
-            warnings.warn('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(loader), elapsed))
+            # warnings.warn('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(loader), elapsed))
             print('  Batch {:>5,}  of  {:>5,}.    Elapsed: {:}.'.format(step, len(loader), elapsed))
 
         b_input_ids = batch["input_ids"].to(device)
@@ -355,7 +361,7 @@ def classify(target_features, source_features, base_model, model_filepath, targe
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     input_pairs = input_pairing(target_features, source_features)
     print(f"N of inferences: {len(input_pairs['source'])}")
-    warnings.warn(f"N of inferences: {len(input_pairs['source'])}")
+    # warnings.warn(f"N of inferences: {len(input_pairs['source'])}")
     input_encoded = PairDataset(input_pairs,pre_processor,tokenizer)
     loader = DataLoader(input_encoded, batch_size=64, shuffle=False)
     preds = classifier_predict(model_filepath, loader)
@@ -381,35 +387,36 @@ def find_best_queries (source, target, model, features, r, mode = None, age_to_g
 
     return predictions
 
-source_features = [{'query': 'Standard Deviation',
-                'topic': 'Statistics',
-                'subject': 'Mathematics',
-                'age': '16',
-                'doc_titles': ['How To Calculate The Standard Deviation',
-                               'Standard Deviation (formulas, examples, solutions, videos)']},
-                {'query': 'Solar System',
-                 'topic': 'Universe',
-                 'subject': 'Physics',
-                 'age': '7',
-                 'doc_titles': ['']}]
-
-target_features = [{'query': 'Comparing standard deviation in datasets',
-                'topic': 'Summarizing data to a single value',
-                'subject': 'Statistics and Probability',
-                'age': '16'}]
-
-source_info = [{'id': '3432',
-                'label': 'Standard Deviation',
-                'path': 'Class 11>Mathematics>15 Statistics>Statistics'},
-               {'id': '6768',
-                'label': 'Solar System',
-                'path': 'Class 7>Physics>The Universe>Universe>Solar System'}]
-
-target_info = [{'id': '5886',
-                'label': 'Comparing standard deviation in datasets',
-                'path': 'CCSS High School>Statistics and Probability>Interpreting Categorical and Quantitative Data>Summarizing data to a single value'}]
-
-source_encodings, target_encodings = get_encodings(source_features,target_features,'sentence-transformers/paraphrase-MiniLM-L6-v2')
+# source_features = [{'query': 'Standard Deviation',
+#                 'topic': 'Statistics',
+#                 'subject': 'Mathematics',
+#                 'age': '16',
+#                 'doc_titles': ['How To Calculate The Standard Deviation',
+#                                'Standard Deviation (formulas, examples, solutions, videos)']},
+#                 {'query': 'Solar System',
+#                  'topic': 'Universe',
+#                  'subject': 'Physics',
+#                  'age': '7',
+#                  'doc_titles': ['']}]
+#
+# target_features = [{'query': 'Comparing standard deviation in datasets',
+#                 'topic': 'Summarizing data to a single value',
+#                 'subject': 'Statistics and Probability',
+#                 'age': '16'}]
+#
+# source_info = [{'id': '3432',
+#                 'label': 'Standard Deviation',
+#                 'path': 'Class 11>Mathematics>15 Statistics>Statistics'},
+#                {'id': '6768',
+#                 'label': 'Solar System',
+#                 'path': 'Class 7>Physics>The Universe>Universe>Solar System'}]
+#
+# target_info = [{'id': '5886',
+#                 'label': 'Comparing standard deviation in datasets',
+#                 'path': 'CCSS High School>Statistics and Probability>Interpreting Categorical and Quantitative Data>Summarizing data to a single value'}]
+#
+# source_encodings, target_encodings = get_encodings(source_features,target_features,'../models/cc.en.300.bin')
+# rankings = rank_cosine(source_encodings,source_info,target_encodings,target_info,2)
 
 # base_model = 'distilbert-base-uncased'
 # model_filepath = '../models/distilbert_doctitle,topic,subject,age_13.pth'

@@ -1,7 +1,5 @@
 import lightgbm as lgb
 from collections import defaultdict
-from match_higher_layers import compare_higher_layers
-from match_learning_objectives import average_embeddings
 from scipy.spatial import distance
 from sklearn.feature_extraction import DictVectorizer
 from sentence_transformers import SentenceTransformer
@@ -13,38 +11,31 @@ import os
 from scipy.stats import randint
 from sklearn.model_selection import RandomizedSearchCV
 import numpy as np
+import time
 
-def sample_ids (gold_pairs, predictions, query_copies):
+
+def sample_ids (predictions, query_copies):
 
     instances, groups = [], []
-    random.seed(7)
+    # random.seed(7)
 
-    for gold, pred in zip(gold_pairs.groupby(['TARGET_ID']), predictions.groupby(['TARGET_ID'])):
+    for target, pred_group in predictions.groupby(['TARGET_ID']):
 
-        target, gold_group = gold[0], gold[1]
-        pred_target, pred_group = pred[0], pred[1]
+        pred_group = pred_group.to_dict(orient='list')
 
-        assert target == pred_target
+        pos_queries = []
+        for i, pred in enumerate(pred_group['SOURCE_ID']):
+            if pred_group['GOLD'][i] == 1:
+                instances.append({'target': target,
+                                  'source': pred,
+                                  'gold': 1})
+                pos_queries.append(pred)
 
-        pos_queries = gold_group['SOURCE_ID'].tolist()
-        # info[target] = {'label': gold_group['TARGET'].tolist()[0],
-        #                 'path': gold_group['TARGET_PATH'].tolist()[0]}
-
-        for source in pos_queries:
-            instances.append({'target': target,
-                            'source': source,
-                            'gold': 1})
         n_neg = 0
-        # for i in range(len(pos_queries)):
-        #     source = random.choice(predictions.SOURCE_ID)
-        #     while source in pos_queries or source in [id for pos in pos_queries for ids in query_copies.values() if pos in ids for id in ids]:
-        #         source = random.choice(predictions.SOURCE_ID)
-        #     instances.append({'target': target,
-        #                     'source': source,
-        #                     'gold': 0})
-        #     n_neg += 1
 
-        for pred in pred_group['SOURCE_ID'].tolist(): # .reverse()
+        preds = pred_group['SOURCE_ID']
+        preds.reverse()
+        for pred in preds:
             if n_neg < len(pos_queries):
                 if pred not in pos_queries and pred not in [id for pos in pos_queries for ids in query_copies.values() if pos in ids for id in ids]:
                     instances.append({'target': target,
@@ -55,9 +46,19 @@ def sample_ids (gold_pairs, predictions, query_copies):
 
         groups.append(len(pos_queries)+n_neg)
 
+        # for i in range(len(pos_queries)):
+        #     source = random.choice(predictions.SOURCE_ID)
+        #     while source in pos_queries or source in [id for pos in pos_queries for ids in query_copies.values() if pos in ids for id in ids]:
+        #         source = random.choice(predictions.SOURCE_ID)
+        #     instances.append({'target': target,
+        #                     'source': source,
+        #                     'gold': 0})
+        #     n_neg += 1
+
         assert n_neg == len(pos_queries), f'{len(pos_queries)} positives and {n_neg} negatives'
 
     return instances, groups
+
 
 def get_info (data_dict, ids, age_to_grade, features):
 
@@ -87,46 +88,137 @@ def get_info (data_dict, ids, age_to_grade, features):
 
     return info
 
-def compare_query(target,source,model,model_filepath):
 
-    cos_dict = dict()
+def get_higher_layers (path, features, age_to_grade):
 
-    target_query = model.encode(target['query'])
-    source_query = model.encode(source['query'])
-    source_query = average_embeddings(model, model_filepath, [source], [source_query])[0]  # add doc title info
-    cos_dict['query'] = 1 - distance.cosine(target_query, source_query)
+    layers = path.split('>')
+    hl_dict = defaultdict()
+    assert len(layers) == 5, f'{path} is not a complete path'
+    if 'topic' in features:
+        hl_dict['topic'] = layers[-1]
+    if 'unit' in features:
+        hl_dict['unit'] = layers[-2]
+    if 'subject' in features:
+        hl_dict['subject'] = layers[-3]
+    if age_to_grade and 'grade' in features:
+        age = find_age(age_to_grade,curriculum=layers[0],grade=layers[-4])
+        hl_dict['age'] = age
+
+    return hl_dict
+
+
+def compare_higher_layers(target,source,cos_dict,model):
+
+    for k, v in target.items():
+        if k == 'age':
+            target_vector, source_vector = [], []
+            for i in range(0,19):
+                if int(v) <= i: target_vector.append(1)
+                else: target_vector.append(0)
+                if int(source[k]) <= i: source_vector.append(1)
+                else: source_vector.append(0)
+            target_vector = np.array(target_vector)
+            source_vector = np.array(source_vector)
+        elif k in ['subject','unit','topic']:
+            if v == '':
+                target_vector = np.zeros((384,))
+            else:
+                target_vector = model.encode(v)
+            if source[k] == '':
+                source_vector = np.zeros((384,))
+            else:
+                source_vector = model.encode(source[k])
+        if k not in ['doc_titles','query']:
+            sim_score = 1 - distance.cosine(target_vector,source_vector)
+            cos_dict[k] = sim_score
 
     return cos_dict
+
 
 def read_in_data(data):
 
     instances, groups = [],[]
 
     for name, group in data.groupby(['TARGET_ID']):
-        # if name == '10115':
-            for source, gold in zip(group['SOURCE_ID'].tolist(), group['gold'].tolist()):
-                instances.append({'target': name,
+
+        for source, gold in zip(group['SOURCE_ID'].tolist(), group['GOLD'].tolist()):
+            instances.append({'target': name,
                                 'source': source,
                                 'gold': gold})
-            groups.append(len(group['SOURCE_ID'].tolist()))
+
+        groups.append(len(group['SOURCE_ID'].tolist()))
+
+    assert len(instances) == sum(groups), 'Length of instances is not the same as the sum of group sizes'
 
     return instances, groups
 
-def prepare_data (gold, data_dict, model_filepath, features, age_to_grade, mode, random_seed, query_copies=None, predictions=None, save_cosine=True):
+
+def average_embeddings (model, source_features, query_encoding):
+
+    if 'doc_titles' in source_features.keys():
+        query_doc_titles = source_features['doc_titles']
+        if query_doc_titles == []: query_doc_titles = ['']
+        title_encodings = model.encode(query_doc_titles)
+        title_encodings = np.mean(title_encodings, axis=0)
+        query_encoding = np.stack((query_encoding, title_encodings))
+
+    if 'doc_sums' in source_features.keys():
+        query_doc_sums = source_features['doc_sums']
+        if query_doc_sums == []: query_doc_sums = ['']
+        sum_encodings = model.encode(query_doc_sums)
+        sum_encodings = np.mean(sum_encodings,axis=0)
+        if query_encoding.shape[0] == 2:
+            query_encoding = np.stack((query_encoding[0],query_encoding[1],sum_encodings))
+        else:
+            query_encoding = np.stack((query_encoding, sum_encodings))
+
+    query_encoding = np.mean(query_encoding, axis=0)
+
+    return query_encoding
+
+
+def compare_query(target,source,model):
+
+    cos_dict = dict()
+
+    target_query = model.encode(target['query'])
+    source_query = model.encode(source['query'])
+    source_query = average_embeddings(model, source, source_query)
+    cos_dict['query'] = 1 - distance.cosine(target_query, source_query)
+
+    return cos_dict
+
+def get_groups_from_file(input):
+
+    n = 0
+    groups = []
+    group_column = input.tolist()
+    while n != len(group_column):
+        i = group_column[n]
+        groups.append(i)
+        n += i
+    return groups
+
+def prepare_data (predictions, data_dict, model_filepath, DATA_DIR, features, age_to_grade, mode, random_seed, query_copies=None, save_cosine=True):
 
     cos_data, y, groups = [], [], []
 
-    if os.path.isfile(f'../data/ltr_input_{mode}_{random_seed}_{features}.json'):
-       input = pd.read_csv(f'../data/ltr_input_{mode}_{random_seed}_{features}.json', sep='\t',dtype={'y':int,'group':int})
-       y = input['y'].tolist()
-       # TODO get group info
-       input = input.drop(['y','group'],axis=1)
-       cos_data = input.to_dict('records')
-       print(cos_data[0])
+    if os.path.isfile(f'{DATA_DIR}/ltr_input_{mode}_{random_seed}_grade,subject,topic.csv'):
+        input = pd.read_csv(f'{DATA_DIR}/ltr_input_{mode}_{random_seed}_grade,subject,topic.csv', sep='\t',dtype={'y':int,'group':int})
+        y = input['y'].tolist()
+        groups = get_groups_from_file(input['group'])
+        assert len(input['y']) == sum(groups), 'Sum of queries in groups is not the same as in data'
+        features_to_include = features.split(',')
+        features_to_include.append('query')
+        if 'grade' in features_to_include:
+            features_to_include.remove('grade')
+            features_to_include.append('age')
+        input = input[features_to_include]
+        cos_data = input.to_dict('records')
 
     else:
-        if mode == 'train': instances, groups = sample_ids(gold, predictions, query_copies)
-        elif mode == 'test': instances, groups = read_in_data(gold)
+        if mode == 'train': instances, groups = sample_ids(predictions, query_copies)
+        elif mode == 'test': instances, groups = read_in_data(predictions)
         info = get_info(data_dict, instances, age_to_grade, features)
         # print(info['30311'])
         # print(info['30310'])
@@ -136,9 +228,9 @@ def prepare_data (gold, data_dict, model_filepath, features, age_to_grade, mode,
             target = info[pair['target']]
             source = info[pair['source']]
             if mode == 'train':
-                cos_dict = compare_query(target, source, model, model_filepath)
+                cos_dict = compare_query(target, source, model)
             elif mode == 'test':
-                for t, s, score in zip(gold.TARGET_ID, gold.SOURCE_ID, gold.SCORE):
+                for t, s, score in zip(predictions.TARGET_ID, predictions.SOURCE_ID, predictions.SCORE):
                     if t == pair['target'] and s == pair['source']:
                         cos_dict = {'query': score}
             cos_dict = compare_higher_layers(target, source, cos_dict, model)
@@ -151,11 +243,11 @@ def prepare_data (gold, data_dict, model_filepath, features, age_to_grade, mode,
             input = pd.DataFrame.from_records(cos_data)
             input['group'] = [g for i in groups for g in [i] * i]
             input['y'] = y
-            input.to_csv(f'../data/ltr_input_{mode}_{random_seed}_{features}.json', sep='\t',index=False)
+            input.to_csv(f'{DATA_DIR}/ltr_input_{mode}_{random_seed}_{features}.csv', sep='\t',index=False)
 
     vec = DictVectorizer()
     x = vec.fit_transform(cos_data)
-    print(vec.feature_names_)
+    print(f'Input vector feature names: {vec.feature_names_}')
     # print(x[1])
     # print(x[26],'\n')
 
@@ -178,46 +270,65 @@ def learning_rate_005_decay_power_099(current_iter):
     return lr if lr > 1e-3 else 1e-3
 # reference stops here
 
-def train_ltr (train_data, train_predictions, dev_data, dev_predictions, data_dict, model_filepath, model_save_path, random_seed, age_to_grade, features, query_copies):
+def train_ltr (train_predictions, dev_predictions, data_dict, model_filepath, model_save_path, random_seed, age_to_grade, features, query_copies, DATA_DIR):
 
     print(f'Training LambdaMART with features {features+",query"}')
-    train, train_groups, train_gold = prepare_data(train_data, data_dict, model_filepath, features, age_to_grade, 'train', random_seed, query_copies, train_predictions)
-    dev, dev_groups, dev_gold = prepare_data(dev_data, data_dict, model_filepath, features, age_to_grade, 'train', random_seed, query_copies, dev_predictions)
+    start_time = time.perf_counter()
+    train, train_groups, train_gold = prepare_data(train_predictions,data_dict, model_filepath, DATA_DIR, features, age_to_grade, 'train', random_seed, query_copies)
+    dev, dev_groups, dev_gold = prepare_data(dev_predictions,data_dict, model_filepath, DATA_DIR, features, age_to_grade, 'train', random_seed, query_copies)
     # print(train.shape, len(train_groups), len(train_gold))
 
     feature_names = features.replace('grade', 'age').split(',')
     feature_names.append('query')
     feature_names.sort()
 
-    # hyper-parameter tuning
-    params = {'num_leaves': randint(10,100),
-              #'max_depth': randint(1,10),
-              'boosting': ['gbdt','dart','goss'],
-              'n_estimators' : randint(20,50)}
-    fit_parameters = {'group': train_groups,
-                    'eval_set': [(dev, dev_gold)],
-                    "eval_group": [dev_groups],
-                    "early_stopping_rounds": 15,
-                    "eval_metric" : ['map','binary_logloss'],
-                    "feature_name" : feature_names}
-    gbm = lgb.LGBMRanker(random_state=random_seed)
-    rs = RandomizedSearchCV(
-        estimator=gbm, param_distributions=params,
-        n_iter=10,
-        scoring=['average_precision'],
-        refit=True,
-        random_state=random_seed,
-        verbose=True)
-    rs.fit(train,train_gold,**fit_parameters)
-    print('Best score reached: {} with params: {} '.format(rs.best_score_, rs.best_params_))
+    # hyper-parameter tuning: not possible because sklearn does not support ranking models for model selection (group parameter cannot be passed to estimator)
+    # params = {'num_leaves': randint(10,100),
+    #           #'max_depth': randint(1,10),
+    #           'boosting': ['gbdt','dart','goss'],
+    #           'n_estimators' : randint(20,50)}
+    # fit_parameters = {'group': train_groups,
+    #                 'eval_set': [(dev, dev_gold)],
+    #                 "eval_group": [dev_groups],
+    #                 "early_stopping_rounds": 15,
+    #                 "eval_metric" : ['mrr','binary_logloss'],
+    #                 "feature_name" : feature_names}
+    # gbm = lgb.LGBMRanker(random_state=random_seed)
+    # rs = RandomizedSearchCV(
+    #     estimator=gbm, param_distributions=params,
+    #     n_iter=10,
+    #     scoring=['average_precision', 'top_k_accuracy'],
+    #     refit='average_precision',
+    #     random_state=random_seed,
+    #     verbose=True)
+    # rs.fit(train,train_gold,**fit_parameters)
+    # print('Best score reached: {} with params: {} '.format(rs.best_score_, rs.best_params_))
+    #
+    # # train final model
+    # gbm = lgb.LGBMRanker(**rs.best_estimator_.get_params())
+    # model = gbm.fit(train,train_gold,**fit_parameters,
+    #                 callbacks=[lgb.reset_parameter(learning_rate=learning_rate_010_decay_power_0995)])
 
-    # train final model
-    gbm = lgb.LGBMRanker(**rs.best_estimator_.get_params())
-    model = gbm.fit(train,train_gold,**fit_parameters,
+    gbm = lgb.LGBMRanker(random_state=random_seed,
+                         num_leaves=50,
+                         max_depth=5,
+                         n_estimators=20)
+
+    model = gbm.fit(train, train_gold,
+                    group=train_groups,
+                    eval_set=[(dev, dev_gold)],
+                    eval_group=[dev_groups],
+                    early_stopping_rounds=15,
+                    eval_metric=['mrr','binary_logloss'],
+                    feature_name=feature_names,
                     callbacks=[lgb.reset_parameter(learning_rate=learning_rate_010_decay_power_0995)])
 
     model.booster_.save_model(f'{model_save_path}')
-    print(model.feature_importances_)
+
+    end_time = time.perf_counter()
+    seconds = end_time - start_time
+    convert = time.strftime("%H:%M:%S", time.gmtime(seconds))
+    print(f"Training DONE! It took {convert} to train LTR")
 
     # print(model.evals_result_.values()[0])
     # eval = model.evals_result_.values()[0].items()
@@ -228,13 +339,14 @@ def train_ltr (train_data, train_predictions, dev_data, dev_predictions, data_di
     #     json.dump(eval_dict, outfile)
 
 
-def ltr_infer (test, data_dict, k, k2, model_filepath, model_save_path, age_to_grade, features, results_filepath):
+def ltr_infer (test, data_dict, k, k2, model_filepath, model_save_path, age_to_grade, features, results_filepath, random_seed, DATA_DIR):
 
+    print('Re-ranking with LTR...')
     reranking = pd.DataFrame()
     model = lgb.Booster(model_file=model_save_path)
-    print(model.feature_name())
-    print(model.feature_importance())
-    x, groups, y = prepare_data(test, data_dict, model_filepath, features, age_to_grade, 'test')
+    print(f'LTR model features: {model.feature_name()}')
+    print(f'LTR feature importance: {model.feature_importance()}')
+    x, groups, y = prepare_data(test, data_dict, model_filepath, DATA_DIR, features, age_to_grade, 'test', random_seed)
     targets = list(test.groupby(['TARGET_ID']))
     split = range(k, x.shape[0], k)
     target_index = range(0, len(groups))

@@ -57,7 +57,7 @@ def generate_pairs_file(data_filepath, pairs_filepath, random_seed):
             out.write(f'{target_queries[i]}\t{negative_queries[i]}\t0\n')
 
 
-def generate_info_file(data_dict_filepath, info_filepath, queries, doc_sums, age_to_grade):
+def generate_info_file(data_dict_filepath, info_filepath, all_queries, doc_sums, age_to_grade):
 
     with open(data_dict_filepath) as json_file:
         data = json.load(json_file)
@@ -69,14 +69,15 @@ def generate_info_file(data_dict_filepath, info_filepath, queries, doc_sums, age
                 for unit_id, unit in subject['unit'].items():
                     for topic_id, topic in unit['topic'].items():
                         for query_id, query in topic['query'].items():
-                            if query_id in queries:
+                            if query_id in all_queries:
                                 label = query['label']
                                 if label == '': label = topic['label']
                                 query_dict = {'id': query_id,
                                               'query_term': label,
                                               'topic': topic['label'],
                                               'subject': subject['label'],
-                                              'grade': subject['label'],
+                                              'grade': grade['label'],
+                                              'curriculum': cur['label'],
                                               'doc_titles': ' '.join(
                                                   [doc_info['title'] for doc_info in query['docs'].values() if
                                                    doc_info['pin']]),
@@ -113,16 +114,15 @@ def generate_info_file(data_dict_filepath, info_filepath, queries, doc_sums, age
                                 rows.append(query_dict)
 
     with open(info_filepath, 'w', encoding="utf-8") as out:
-        headers = ['id','query_term','doc_titles','doc_sums_1sent','doc_sums_nsents','topic','subject','grade','age']
+        headers = ['query_id', 'query_term', 'doc_titles', 'doc_sums_1sent', 'doc_sums_nsents', 'topic', 'subject', 'grade',
+                   'age', 'curriculum']
         headers = '\t'.join(headers) + '\n'
-        # headers = headers.encode('UTF-8',errors='ignore')
-        # headers = headers.decode('UTF-8')
         out.write(headers)
         for query_dict in rows:
             out.write(
                 f'{query_dict["id"]}\t{query_dict["query_term"]}\t{query_dict["doc_titles"]}\t{query_dict["doc_sums_1sent"]}'
                 f'\t{query_dict["doc_sums_nsent"]}\t{query_dict["topic"]}\t{query_dict["subject"]}\t{query_dict["grade"]}'
-                f'\t{query_dict["age"]}\n')
+                f'\t{query_dict["age"]}\t{query_dict["curriculum"]}\n')
 
 
 def format_time(elapsed):
