@@ -254,19 +254,9 @@ def prepare_data (predictions, data_dict, model_filepath, DATA_DIR, features, ag
     return x, groups, y
 
 # from https://www.kaggle.com/code/mlisovyi/lightgbm-hyperparameter-optimisation-lb-0-761/notebook
-def learning_rate_010_decay_power_099(current_iter):
-    base_learning_rate = 0.1
-    lr = base_learning_rate  * np.power(.99, current_iter)
-    return lr if lr > 1e-3 else 1e-3
-
 def learning_rate_010_decay_power_0995(current_iter):
     base_learning_rate = 0.1
     lr = base_learning_rate  * np.power(.995, current_iter)
-    return lr if lr > 1e-3 else 1e-3
-
-def learning_rate_005_decay_power_099(current_iter):
-    base_learning_rate = 0.05
-    lr = base_learning_rate  * np.power(.99, current_iter)
     return lr if lr > 1e-3 else 1e-3
 # reference stops here
 
@@ -309,10 +299,10 @@ def train_ltr (train_predictions, dev_predictions, data_dict, model_filepath, mo
     # model = gbm.fit(train,train_gold,**fit_parameters,
     #                 callbacks=[lgb.reset_parameter(learning_rate=learning_rate_010_decay_power_0995)])
 
-    gbm = lgb.LGBMRanker(random_state=random_seed,
-                         num_leaves=50,
-                         max_depth=5,
-                         n_estimators=20)
+    gbm = lgb.LGBMRanker(random_state=random_seed)
+                         # num_leaves=50,
+                         # max_depth=5,
+                         # n_estimators=20)
 
     model = gbm.fit(train, train_gold,
                     group=train_groups,
@@ -320,8 +310,8 @@ def train_ltr (train_predictions, dev_predictions, data_dict, model_filepath, mo
                     eval_group=[dev_groups],
                     early_stopping_rounds=15,
                     eval_metric=['mrr','binary_logloss'],
-                    feature_name=feature_names,
-                    callbacks=[lgb.reset_parameter(learning_rate=learning_rate_010_decay_power_0995)])
+                    feature_name=feature_names)
+                    # callbacks=[lgb.reset_parameter(learning_rate=learning_rate_010_decay_power_0995)])
 
     model.booster_.save_model(f'{model_save_path}')
 

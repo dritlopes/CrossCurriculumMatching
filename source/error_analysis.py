@@ -7,6 +7,9 @@ from evaluation import recall_at_k
 import matplotlib.pyplot as plt
 import numpy as np
 import csv
+import rbo
+from utils import grade_by_age,find_age
+
 
 def read_in_rq1 (random_seed):
 
@@ -35,6 +38,134 @@ def read_in_rq1 (random_seed):
                                                            'SOURCE_GRADEID': str})
 
     return all, gold
+
+
+def generate_rankings_rq1(n_targets, all):
+    combinations = defaultdict(list)
+
+    for target, group in all.groupby(['TARGET_ID']):
+
+        pred = {'ft_sbert_pos': [],
+                'ft_sbert_neg': [],
+                'sbert_pos': [],
+                'sbert_neg': [],
+                'fasttext_pos': [],
+                'fasttext_neg': [],
+                'tfidf_pos': [],
+                'tfidf_neg': []}
+
+        for model, ranking in group.groupby(['MODEL']):
+            if 1 in ranking['GOLD'].tolist():
+                pred[f'{model}_pos'].append(ranking['TARGET_ID'].tolist()[0])
+            if 1 not in ranking['GOLD'].tolist():
+                pred[f'{model}_neg'].append(ranking['TARGET_ID'].tolist()[0])
+
+        for i in pred['ft_sbert_pos']:
+            if i in pred['sbert_neg'] and i in pred['fasttext_neg'] and i in pred['tfidf_neg']:
+                combinations['1 0 0 0'].append(i)
+            if i in pred['sbert_pos'] and i in pred['fasttext_neg'] and i in pred['tfidf_neg']:
+                combinations['1 1 0 0'].append(i)
+        for i in pred['ft_sbert_neg']:
+            if i in pred['sbert_neg'] and i in pred['fasttext_pos'] and i in pred['tfidf_pos']:
+                combinations['0 0 1 1'].append(i)
+            if i in pred['sbert_neg'] and i in pred['fasttext_neg'] and i in pred['tfidf_neg']:
+                combinations['0 0 0 0'].append(i)
+
+    subset = pd.DataFrame()
+    target_col, target_path_col, target_id_col, combi = [], [], [], []
+
+    for key, ids in combinations.items():
+
+        subset_ids = []
+        if len(ids) < n_targets:
+            subset_ids = ids
+        else:
+            for n in range(n_targets):
+                subset_ids.append(random.choice(ids))
+
+        for id in subset_ids:
+            for target, group in all.groupby(['TARGET_ID']):
+
+                if id == target:
+
+                    subset_col = pd.DataFrame()
+                    subset_rankings = []
+
+                    for n in group['TARGET'].tolist()[:5]:
+                        target_col.append(n)
+                    for n in group['TARGET_ID'].tolist()[:5]:
+                        target_id_col.append(n)
+                    for n in group['TARGET_PATH'].tolist()[:5]:
+                        target_path_col.append(n)
+                    for n in range(5):
+                        combi.append(key)
+
+                    for model, ranking in group.groupby(['MODEL']):
+                        model_ranking = ranking[['SOURCE', 'SOURCE_ID', 'SOURCE_PATH', 'GOLD']].copy().reset_index()
+                        model_ranking = model_ranking.rename(columns={'SOURCE': f'{model.upper()}',
+                                                                      'SOURCE_ID': f'{model.upper()}_ID',
+                                                                      'SOURCE_PATH': f'{model.upper()}_PATH',
+                                                                      'GOLD': f'{model.upper()}_GOLD'})
+
+                        model_ranking.drop(columns='index')
+                        subset_rankings.append(model_ranking)
+
+                    for r in subset_rankings:
+                        subset_col = pd.concat((subset_col, r), axis=1)
+
+                    subset = pd.concat((subset, subset_col), axis=0)
+
+    assert len(target_col) == len(subset), f'Length of target: {len(target_col)}, length of subset {len(subset)}'
+
+    subset['TARGET'] = target_col
+    subset['TARGET_ID'] = target_id_col
+    subset['TARGET_PATH'] = target_path_col
+    subset['COMBI'] = combi
+    subset = subset[['TARGET', 'COMBI', 'TARGET_ID', 'TARGET_PATH',
+                     'FT_SBERT_ID', 'FT_SBERT', 'FT_SBERT_GOLD', 'FT_SBERT_PATH',
+                     'SBERT_ID', 'SBERT', 'SBERT_GOLD', 'SBERT_PATH',
+                     'FASTTEXT_ID', 'FASTTEXT', 'FASTTEXT_GOLD', 'FASTTEXT_PATH',
+                     'TFIDF_ID', 'TFIDF', 'TFIDF_GOLD', 'TFIDF_PATH']]
+    subset.to_csv('../eval/results_subset_rankings_rq1.csv', sep='\t', index=False)
+
+def rbo_rankings(results, n_examples, models):
+
+    rankings = defaultdict()
+
+    for model, model_group in results.groupby(['MODEL']):
+
+        if model in models:
+            target_dict = defaultdict()
+            for target, r in model_group.groupby(['TARGET_ID']):
+                target_dict[target] = {'ranking': list(r.SOURCE_ID),
+                                            'ranking_text': list(r.SOURCE),
+                                            'target': target,
+                                            'target_text': list(r.TARGET)[0],
+                                            'gold': list(r.GOLD)}
+                rankings[model] = target_dict
+
+    # assert len(rankings[models[0]]['rankings']) == len(rankings[models[1]]['rankings']), f'Not the same number of rankings between models. {len(rankings[models[0]]["rankings"])} for model {models[0]} and {len(rankings[models[1]]["rankings"])} for model {models[1]}'
+
+    rbo_scores = []
+
+    for t in rankings[models[0]].keys():
+        s = rbo.RankingSimilarity(rankings[models[0]][t]['ranking'],rankings[models[1]][t]['ranking']).rbo()
+        rbo_scores.append((t,rankings[models[0]][t]['target_text'],rankings[models[0]][t]['ranking'],
+                           rankings[models[0]][t]['ranking_text'],rankings[models[0]][t]['gold'],
+                           rankings[models[1]][t]['ranking'],rankings[models[1]][t]['ranking_text'],
+                           rankings[models[1]][t]['gold'],s))
+    rbo_scores.sort(key=lambda x: x[-1], reverse=True)
+
+    rbo_scores_topk = rbo_scores[:n_examples]
+    rbo_scores_lask = rbo_scores[len(rbo_scores) - n_examples:]
+    rbo_scores = rbo_scores_topk + rbo_scores_lask
+
+    df = pd.DataFrame(rbo_scores,
+                      columns=['TARGET_ID','TARGET',f'{models[0]}_SOURCE_ID',f'{models[0]}_SOURCE', f'{models[0]}_GOLD',
+                                f'{models[1]}_SOURCE_ID',f'{models[1]}_SOURCE',f'{models[1]}_GOLD','RBO_SCORE'])
+
+    df.to_csv(f'../eval/rbo_{models[0]},{models[1]}.csv', sep='\t', index=False)
+
 
 def categorize_rankings (all, gold, data):
 
@@ -77,12 +208,13 @@ def categorize_rankings (all, gold, data):
         else:
             missing.add(target[0])
 
-    # print(f'{len(missing)} missing target ids: {missing}')
+    print(f'{len(missing)} missing target ids: {missing}')
 
     df = pd.DataFrame(rows)
     df.to_csv(f'../results/results_per_target_rq1.csv', sep='\t', index=False)
 
     return df
+
 
 def analyse_rankings (df,layers):
 
@@ -117,125 +249,65 @@ def barplot_scores_bins (mean_recall_dict, models=None,features=None, rq='1'):
 
     for feature in features:
 
-        plt.figure(num=feature, clear=True, figsize=(20,20))
+        plt.figure(figsize=(25,20))
+        plt.rcParams.update({'font.size': 25})
 
         if not models:
-            models = list(mean_recall_dict[feature].keys())
+            models = []
+            if 'ft_sbert' in list(mean_recall_dict[feature].keys()):
+                models.append('ft_sbert')
+            if 'sbert' in list(mean_recall_dict[feature].keys()):
+                models.append('sbert')
+            if 'fasttext' in list(mean_recall_dict[feature].keys()):
+                models.append('fasttext')
+            if 'tfidf' in list(mean_recall_dict[feature].keys()):
+                models.append('tfidf')
 
-        for i, model in enumerate(models):
+        bins = mean_recall_dict[feature][models[0]][0]
+        n_bins = len(bins)
+        bar_positions = np.arange(n_bins)
+        width = 0.20
 
-            names = mean_recall_dict[feature][model][0]
+        for model in models:
+
             values = mean_recall_dict[feature][model][1]
             sds = mean_recall_dict[feature][model][2]
+            plt.barh(bar_positions, values, width, label=model, xerr=sds)
+            bar_positions = bar_positions + width
 
-            plt.subplot(2,2,i+1)
-            plt.bar(names, values, yerr=sds)
-            plt.xlabel(model)
-            plt.xticks()
-            if feature != 'AGE': plt.xticks(rotation=90)
-            plt.ylabel('recall@5')
-            plt.yticks()
-            plt.ylim(0, 1)
-            #params = {'xtick.labelsize': 25, 'ytick.labelsize': 25}
-            #plt.rcParams.update(params)
-
-        plt.title(f'Mean recall at top 5 per {feature.lower()} per encoder on learning objective')
+        plt.xlabel('recall@5')
+        plt.xlim(0, 1)
+        plt.yticks(np.arange(n_bins) + width, bins)
+        plt.legend()
+        plt.title(f'Mean recall at top 5 per {feature} per encoder on learning objective')
         plt.savefig(f'../eval/fig_{feature}_rq{rq}.png')
 
-def heatmap_compare_models (mean_recall_dict):
-
-    pass
-
-
-def generate_rankings_rq1 (n_targets, all):
-
-    combinations = defaultdict(list)
-
-    for target, group in all.groupby(['TARGET_ID']):
-
-        pred = {'ft_sbert_pos': [],
-                'ft_sbert_neg': [],
-                'sbert_pos': [],
-                'sbert_neg': [],
-                'fasttext_pos': [],
-                'fasttext_neg': [],
-                'tfidf_pos': [],
-                'tfidf_neg': []}
-
-        for model, ranking in group.groupby(['MODEL']):
-            if 1 in ranking['GOLD'].tolist():
-                pred[f'{model}_pos'].append(ranking['TARGET_ID'].tolist()[0])
-            if 1 not in ranking['GOLD'].tolist():
-               pred[f'{model}_neg'].append(ranking['TARGET_ID'].tolist()[0])
-
-        for i in pred['ft_sbert_pos']:
-            if i in pred['sbert_neg'] and i in pred['fasttext_neg'] and i in pred['tfidf_neg']:
-                combinations['1 0 0 0'].append(i)
-            if i in pred['sbert_pos'] and i in pred['fasttext_neg'] and i in pred['tfidf_neg']:
-                combinations['1 1 0 0'].append(i)
-        for i in pred['ft_sbert_neg']:
-            if i in pred['sbert_neg'] and i in pred['fasttext_pos'] and i in pred['tfidf_pos']:
-                combinations['0 0 1 1'].append(i)
-            if i in pred['sbert_neg'] and i in pred['fasttext_neg'] and i in pred['tfidf_neg']:
-                combinations['0 0 0 0'].append(i)
-
-    subset = pd.DataFrame()
-    target_col, target_path_col, target_id_col, combi = [],[],[], []
-
-    for key, ids in combinations.items():
-
-        subset_ids = []
-        if len(ids) < n_targets:
-            subset_ids = ids
-        else:
-            for n in range(n_targets):
-                subset_ids.append(random.choice(ids))
-
-        for id in subset_ids:
-            for target, group in all.groupby(['TARGET_ID']):
-
-                if id == target:
-
-                    subset_col = pd.DataFrame()
-                    subset_rankings = []
-
-                    for n in group['TARGET'].tolist()[:5]:
-                        target_col.append(n)
-                    for n in group['TARGET_ID'].tolist()[:5]:
-                        target_id_col.append(n)
-                    for n in group['TARGET_PATH'].tolist()[:5]:
-                        target_path_col.append(n)
-                    for n in range(5):
-                        combi.append(key)
-
-                    for model, ranking in group.groupby(['MODEL']):
-                        model_ranking = ranking[['SOURCE','SOURCE_ID','SOURCE_PATH','GOLD']].copy().reset_index()
-                        model_ranking = model_ranking.rename(columns={'SOURCE': f'{model.upper()}',
-                                                                        'SOURCE_ID': f'{model.upper()}_ID',
-                                                                        'SOURCE_PATH': f'{model.upper()}_PATH',
-                                                                        'GOLD': f'{model.upper()}_GOLD'})
-
-                        model_ranking.drop(columns='index')
-                        subset_rankings.append(model_ranking)
-
-                    for r in subset_rankings:
-                        subset_col = pd.concat((subset_col,r),axis=1)
-
-                    subset = pd.concat((subset,subset_col),axis=0)
-
-    assert len(target_col) == len(subset), f'Length of target: {len(target_col)}, length of subset {len(subset)}'
-
-    subset['TARGET'] = target_col
-    subset['TARGET_ID'] = target_id_col
-    subset['TARGET_PATH'] = target_path_col
-    subset['COMBI'] = combi
-    subset = subset[['TARGET', 'COMBI', 'TARGET_ID', 'TARGET_PATH',
-                     'FT_SBERT_ID', 'FT_SBERT', 'FT_SBERT_GOLD', 'FT_SBERT_PATH',
-                     'SBERT_ID', 'SBERT', 'SBERT_GOLD', 'SBERT_PATH',
-                     'FASTTEXT_ID', 'FASTTEXT', 'FASTTEXT_GOLD', 'FASTTEXT_PATH',
-                     'TFIDF_ID', 'TFIDF', 'TFIDF_GOLD', 'TFIDF_PATH']]
-    subset.to_csv('../eval/results_subset_rankings_rq1.csv', sep='\t', index=False)
-
+    # for feature in features:
+    #
+    #     plt.figure(num=feature, clear=True, figsize=(20,20))
+    #
+    #     if not models:
+    #         models = list(mean_recall_dict[feature].keys())
+    #
+    #     for i, model in enumerate(models):
+    #
+    #         names = mean_recall_dict[feature][model][0]
+    #         values = mean_recall_dict[feature][model][1]
+    #         sds = mean_recall_dict[feature][model][2]
+    #
+    #         plt.subplot(2,2,i+1)
+    #         plt.bar(names, values, yerr=sds)
+    #         plt.xlabel(model)
+    #         plt.xticks()
+    #         if feature != 'AGE': plt.xticks(rotation=90)
+    #         plt.ylabel('recall@5')
+    #         plt.yticks()
+    #         plt.ylim(0, 1)
+    #         #params = {'xtick.labelsize': 25, 'ytick.labelsize': 25}
+    #         #plt.rcParams.update(params)
+    #
+    #     plt.title(f'Mean recall at top 5 per {feature.lower()} per encoder on learning objective')
+    #     plt.savefig(f'../eval/fig_{feature}_rq{rq}.png')
 
 def generate_pairs_rq1 (n_targets, all):
 
@@ -313,6 +385,115 @@ def generate_pairs_rq1 (n_targets, all):
     subset_df = pd.DataFrame(subset)
     subset_df.to_csv('../eval/results_subset_pairs_rq1.csv', sep='\t', index=False)
 
+def sample (predictions, age_to_grage, models=None, proportion=0.05):
+
+    random_seed = 42
+    random.seed(random_seed)
+    df_matches = []
+    df_mismatches = []
+    map = defaultdict()
+
+    for model, model_pred in predictions.groupby(['MODEL']):
+
+        for cur, cur_group in model_pred.groupby(['TARGET_CURRICULUM']):
+
+            all_matches, all_mismatches = [], []
+
+            for target, ranking in cur_group.groupby(['TARGET_ID']):
+
+                ranking = ranking.to_dict(orient='list')
+
+                add_match, add_mismatch = True, True
+                for i, source in enumerate(ranking['SOURCE_ID']):
+                    if ranking['GOLD'][i] == 1 and add_match:
+                        all_matches.append((target,ranking['TARGET'][i],
+                                         ranking['TARGET_PATH'][i],source,
+                                         ranking['SOURCE'][i],ranking['SOURCE_PATH'][i]))
+                        add_match = False
+                    elif ranking['GOLD'][i] == 0 and add_mismatch:
+                        all_mismatches.append((target, ranking['TARGET'][i],
+                                         ranking['TARGET_PATH'][i], source,
+                                         ranking['SOURCE'][i], ranking['SOURCE_PATH'][i]))
+                        add_mismatch = False
+
+            sample_matches, sample_mismatches = [],[]
+
+            n_examples = int(proportion * len(all_matches))
+            if n_examples == 0: n_examples = 1
+            while len(sample_matches) < n_examples:
+                sample_matches.append(random.choice(all_matches))
+
+            n_examples = int(proportion * len(all_mismatches))
+            if n_examples == 0: n_examples = 1
+            while len(sample_mismatches) < n_examples:
+                sample_mismatches.append(random.choice(all_mismatches))
+
+            for pair in sample_mismatches:
+
+                target_path = pair[2].split('>')
+                source_path = pair[-1].split('>')
+
+                # define subject
+                sbj_map = [{'Mathematics','Algebra'},
+                           {'Mathematics','Geometry Concepts', 'Geometry'},
+                           {'Mathematics','Statistics and Probability', 'Statistics Concepts'},
+                           {'Mathematics', 'Numbers and Quantities'},
+                           {'Mathematics', 'Functions'},
+                           {'Sciences','Science'},
+                           {'Computing','Computer Science'},
+                           {'Physical Science','Physics', 'Physical Sciences'},
+                           {'Earth and Space Sciences','Physics'},
+                           {'Life Sciences','Biology'}]
+                target_subject = target_path[2]
+                source_subject = source_path[2]
+                subject = 0
+                if target_subject.strip() == source_subject.strip():
+                    subject = 1
+                else:
+                    for subj_set in sbj_map:
+                        if target_subject in subj_set and source_subject in subj_set:
+                            subject = 1
+                            break
+
+                # define age
+                target_age = find_age(age_to_grade, target_path[0].strip(), target_path[1].strip())
+                source_age = find_age(age_to_grade, source_path[0].strip(), source_path[1].strip())
+                age = 0
+                if int(target_age) in [int(source_age), int(source_age) + 1, int(source_age) - 1]:
+                    age = 1
+
+                # define terminological type of mismatch
+                # target_text = pair[1].strip()
+                # source_text = pair[4].strip()
+                # overlap = 'no'
+                # if target_text.lower() == source_text.lower():
+                #     overlap = 'full'
+                # elif bool(set(target_text.split(' ')) & set(source_text.split(' '))):
+                #     overlap = 'partial'
+
+                df_mismatches.append({'TARGET': pair[1],
+                                      'TARGET_PATH': pair[2],
+                                      'SOURCE': pair[4],
+                                      'SOURCE_PATH': pair[-1],
+                                      'GOLD': 0,
+                                      'MODEL': model,
+                                      'SUBJECT': subject,
+                                      'AGE': age})
+
+            for pair in sample_matches:
+
+                df_matches.append({'TARGET': pair[1],
+                                    'TARGET_PATH': pair[2],
+                                    'SOURCE': pair[4],
+                                    'SOURCE_PATH': pair[-1],
+                                    'GOLD': 0,
+                                    'MODEL': model})
+
+    df_mismatches = pd.DataFrame(df_mismatches)
+    df_matches = pd.DataFrame(df_matches)
+    df_mismatches.to_csv('../eval/incorrect_matches_rq1.csv',sep='\t',index=False)
+    df_matches.to_csv('../eval/correct_matches_rq1.csv',sep='\t',index=False)
+
 ###############
 
 random_seed = 42
@@ -320,10 +501,15 @@ n_examples = 5
 data_info = pd.read_csv(f'../data/data.csv',sep='\t', dtype= {'query_id': str,'age': str})
 all, gold = read_in_rq1(random_seed)
 # generate_pairs_rq1(n_examples, all)
-generate_rankings_rq1(n_examples, all)
-df = categorize_rankings(all,gold,data_info)
-mean_recall_dict = analyse_rankings(df,layers=['SUBJECT','AGE','CURRICULUM'])
-barplot_scores_bins(mean_recall_dict)
+# generate_rankings_rq1(n_examples, all)
+# df = categorize_rankings(all,gold,data_info)
+# mean_recall_dict = analyse_rankings(df,layers=['SUBJECT','AGE','CURRICULUM'])
+# barplot_scores_bins(mean_recall_dict)
+# rbo_rankings(all,n_examples=20,models=('tfidf','ft_sbert'))
+# rbo_rankings(all,n_examples=20,models=('sbert','ft_sbert'))
+age_to_grade = grade_by_age('ICSE,CBSE,Cambridge,English,CCSS,NGSS,Scotland',
+                            age_filepath=f'../data/MASTER Reading levels and age filter settings (pwd 123456).xlsx')
+sample(all,data_info, age_to_grade, proportion=0.01)
 
 # check if models give reasonable vectors similarity for subject
 # sentences = ['Mathematics', 'Physics', 'History']

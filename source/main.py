@@ -160,19 +160,33 @@ def main():
     source_subjects = ''
     filters = {'curriculums': curriculums, 'grades': source_grades, 'subjects': source_subjects}
 
-    exp_params = {'random_seed': [42,13],
-                  'model': [f'{MODEL_SAVE}/paraphrase-sbert-label-title-rankingloss-nodup_'],
-                  'features': ['doc_title'],
-                  'k': 30,
+    exp_params = {'random_seed': [42,13,7],
+                  'model': [f'tf-idf'],
+                  'features': [''],
+                  'k': 5,
                   # 'r': 100,
                   'filter_age': False,
                   'uncase': False,
                   'method': 'cosine',
-                  'mode': ['train','dev','test'],
+                  'mode': ['test'],
                   'base_model': "",
-                  're-rank': True,
-                  'higher_layers': ['grade,subject,topic','grade,subject','topic','grade','subject'],
+                  're-rank': False,
+                  'higher_layers': None,
                   'k2': 5}
+
+    # exp_params = {'random_seed': [42,13],
+    #               'model': [f'{MODEL_SAVE}/paraphrase-sbert-label-title-rankingloss-nodup_'],
+    #               'features': ['doc_title'],
+    #               'k': 30,
+    #               # 'r': 100,
+    #               'filter_age': False,
+    #               'uncase': False,
+    #               'method': 'cosine',
+    #               'mode': ['train','dev','test'],
+    #               'base_model': "",
+    #               're-rank': True,
+    #               'higher_layers': ['grade,subject,topic','grade,subject','topic','grade','subject'],
+    #               'k2': 5}
 
     # exp_params = {'random_seed': [13],
     #               'model': ['sentence-transformers/paraphrase-MiniLM-L6-v2'],
@@ -311,7 +325,6 @@ def main():
                 method = exp_params['method']
                 base_model = exp_params['base_model']
 
-
                 for features in feature_combi:
 
                     results_filepath = f'{RESULTS_DIR}/{mode}_{model_filepath.replace(f"{MODEL_SAVE}/","").replace("sentence-transformers/", "").replace("_"+ str(random_seed),"")}_{random_seed}_top{k}_{features}_filterAge{exp_params["filter_age"]}.csv'
@@ -387,16 +400,16 @@ def main():
                         print('Saving results of ranking...')
                         save_results(matches_per_cur,results_filepath,k)
 
-                    # print('Evaluating results...')
-                    # print(f'MODEL: {model_filepath.replace(f"{DATA_DIR}", "")}\n'
-                    #       f'RANDOM_SEED: {random_seed}\n'
-                    #       f'FEATURES: {features}\n')
-                    # predictions = pd.read_csv(results_filepath, sep='\t', dtype={'TARGET_ID': str, 'SOURCE_ID': str})
-                    # if 'GOLD' not in predictions.columns:
-                    #     predictions = add_gold_column(predictions,test,query_copies)
-                    #     predictions.to_csv(results_filepath,sep='\t',index=False) # save predictions with gold column
-                    # eval_filepath = f'{EVAL_DIR}/{results_filepath.replace(f"{RESULTS_DIR}/", "").strip(".csv")}.json'
-                    # eval_ranking(predictions, test, query_copies, k, eval_filepath)
+                    print('Evaluating results...')
+                    print(f'MODEL: {model_filepath.replace(f"{DATA_DIR}", "")}\n'
+                          f'RANDOM_SEED: {random_seed}\n'
+                          f'FEATURES: {features}\n')
+                    predictions = pd.read_csv(results_filepath, sep='\t', dtype={'TARGET_ID': str, 'SOURCE_ID': str})
+                    if 'GOLD' not in predictions.columns:
+                        predictions = add_gold_column(predictions,test,query_copies)
+                        predictions.to_csv(results_filepath,sep='\t',index=False) # save predictions with gold column
+                    eval_filepath = f'{EVAL_DIR}/{results_filepath.replace(f"{RESULTS_DIR}/", "").strip(".csv")}.json'
+                    eval_ranking(predictions, test, query_copies, k, eval_filepath)
 
                 # check recall of topn
                 # predictions = pd.read_csv(results_filepath, sep='\t',dtype={'TARGET_ID': str, 'SOURCE_ID': str})

@@ -351,7 +351,7 @@ def rank_logits(predictions, source_info, target_info, r):
         scores.sort(key=lambda x: x[-1], reverse=True)
         rankings[t_dict["id"]] = {'label': t_dict['label'],
                                    'path': t_dict['path'],
-                                   'scores': scores}
+                                   'scores': scores[:r]}
 
     return rankings
 
