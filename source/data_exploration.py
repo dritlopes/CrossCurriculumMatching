@@ -22,30 +22,40 @@ from utils import grade_by_age, find_age
 #
 # nltk.download('omw-1.4')
 
-def tokenize_instances (data_dict, source_curriculums):
+def tokenize_instances (data_dict, curriculums, subjects=None, ages=None):
 
     """
     Create dict with tokenized topics and queries
     :param data_dict: dict containing curriculum trees of wizenoze database
-    :param source_curriculums: the subset of curriculums wanted
+    :param curriculums: the subset of curriculums wanted
     :return: a dict of dicts = {curriculum_name : {grades : [grade1, grade2], topics: [[standard, deviation], [solar, system]]}}
     """
 
     tokenized_cur = defaultdict(lambda: defaultdict(list))
+    if ages: age_to_grade = grade_by_age([cur for cur in curriculums.split(',')])
 
     for cur_id, cur in data_dict.items():
-        if cur['label'] in source_curriculums:
+        if cur['label'] in curriculums:
             for grade_id, grade in cur['grade'].items():
-                tokenized_cur[cur['label']]['grades'].append(str(grade['label']))
-                for subj_id, subj in grade['subject'].items():
-                    tokenized_cur[cur['label']]['subjects'].append(str(subj['label']))
-                    for unit_id, unit in subj['unit'].items():
-                        tokenized_cur[cur['label']]['units'].append(str(unit['label']))
-                        for topic_id, topic in unit['topic'].items():
-                            tokenized_cur[cur['label']]['topics'].append(word_tokenize(str(topic['label'])))
-                            for query_id, query in topic['query'].items():
-                                if query['label'] != '':
-                                    tokenized_cur[cur['label']]['queries'].append(word_tokenize(str(query["label"])))
+                add = True
+                if ages:
+                    age = find_age(age_to_grade,cur['label'],grade['label'])
+                    if str(age) not in ages: add = False
+                if add:
+                    for subj_id, subj in grade['subject'].items():
+                        add = True
+                        if subjects:
+                            if subj['label'] not in subjects: add = False
+                        if add:
+                            tokenized_cur[cur['label']]['grades'].append(str(grade['label']))
+                            tokenized_cur[cur['label']]['subjects'].append(str(subj['label']))
+                            for unit_id, unit in subj['unit'].items():
+                                tokenized_cur[cur['label']]['units'].append(str(unit['label']))
+                                for topic_id, topic in unit['topic'].items():
+                                    tokenized_cur[cur['label']]['topics'].append(word_tokenize(str(topic['label'])))
+                                    for query_id, query in topic['query'].items():
+                                        if query['label'] != '':
+                                            tokenized_cur[cur['label']]['queries'].append(word_tokenize(str(query["label"])))
 
     return tokenized_cur
 
@@ -101,7 +111,7 @@ def descriptive_stats (tokenized_cur):
               f'Ages:{[find_age(age_to_grade,cur_name,grade) for grade in cur["grades"]]}\n'
               f'Subjects:{set(cur["subjects"])}\n')
 
-def clean_text (text, remove_punct = True, remove_stop_words = True, lemmatize = True):
+def clean_text (text, remove_punct, remove_stop_words, lemmatize):
 
     """
     Pre-process tokenized text
@@ -154,18 +164,19 @@ def jaccard_distance(a, b):
 
     return 1.0 * len(a&b)/len(a|b)
 
-def check_n_gram_overlap (tokenized_cur, curriculums, NGRAM = 1, verbose=True):
+def check_n_gram_overlap (tokenized_cur, outputfile, curriculums = None, NGRAM = 1, combi_types = ['query-query'], clean = {'remove_punct': True, 'remove_stop': True, 'lemma': True}, verbose=True):
 
     """
     Check n-gram overlap between topics and queries of a curriculum pair. Write out results.
     :param tokenized_cur: dict with tokenized queries and topics
-    :param target_cur: target curriculum which needs to be matched
-    :param source_cur: the curricula in the database, which form the search space.
+    :param curriculums: curriculums to compare
     :param NGRAM: the size of the token gram, default = 1
     :param verbose: if True, print out results
     """
 
     n_gram_dict = defaultdict(dict)
+    if not curriculums:
+        curriculums = list(tokenized_cur.keys())
 
     for combi in itertools.combinations(curriculums,2):
 
@@ -173,29 +184,41 @@ def check_n_gram_overlap (tokenized_cur, curriculums, NGRAM = 1, verbose=True):
 
         for index, target in enumerate([tokenized_cur[combi[0]]['topics'], tokenized_cur[combi[0]]['queries']]):
 
-            for instance in target:
+            add = False
+            if index == 0 and ('topic-topic' in combi_types or 'topic-query' in combi_types): add = True
+            elif index == 1 and ('query-topic' in combi_types or 'query-query' in combi_types): add = True
 
-                clean_target = clean_text(instance)
-                ng_target = list(ngrams(clean_target, NGRAM))
+            if add:
+                for instance in target:
 
-                for i, source in enumerate([tokenized_cur[combi[1]]['topics'], tokenized_cur[combi[1]]['queries']]):
+                    clean_target = clean_text(instance, clean['remove_punct'], clean['remove_stop'], clean['lemma'])
+                    ng_target = list(ngrams(clean_target, NGRAM))
 
-                    overlap_target = []
+                    for i, source in enumerate([tokenized_cur[combi[1]]['topics'], tokenized_cur[combi[1]]['queries']]):
 
-                    for item in source:
-                        clean_source = clean_text(item)
-                        ng_source = list(ngrams(clean_source,NGRAM))
-                        overlap_ngram = cosine_similarity_ngrams(ng_target,ng_source)
-                        # overlap_ngram = jaccard_distance(ng_target,ng_source)
-                        overlap_target.append(overlap_ngram)
+                        overlap_target = []
 
-                    if overlap_target == []: max_overlap = 0.0
-                    else: max_overlap = max(overlap_target)
+                        add = False
+                        if i == 0 and index == 0 and 'topic-topic' in combi_types: add = True
+                        elif i == 0 and index == 1 and 'topic-query' in combi_types: add = True
+                        elif i == 1 and index == 0 and 'query-topic' in combi_types: add = True
+                        elif i == 1 and index == 1 and 'query-query' in combi_types: add = True
 
-                    if index == 0 and i == 0 : combi_dict['topic-topic'].append(max_overlap)
-                    elif index == 0 and i == 1: combi_dict['topic-query'].append(max_overlap)
-                    elif index == 1 and i == 0: combi_dict['query-topic'].append(max_overlap)
-                    else: combi_dict['query-query'].append(max_overlap)
+                        if add:
+                            for item in source:
+                                clean_source = clean_text(item, clean['remove_punct'], clean['remove_stop'], clean['lemma'])
+                                ng_source = list(ngrams(clean_source,NGRAM))
+                                overlap_ngram = cosine_similarity_ngrams(ng_target,ng_source)
+                                # overlap_ngram = jaccard_distance(ng_target,ng_source)
+                                overlap_target.append(overlap_ngram)
+
+                            if overlap_target == []: max_overlap = 0.0
+                            else: max_overlap = max(overlap_target)
+
+                            if index == 0 and i == 0: combi_dict['topic-topic'].append(max_overlap)
+                            elif index == 0 and i == 1: combi_dict['topic-query'].append(max_overlap)
+                            elif index == 1 and i == 0: combi_dict['query-topic'].append(max_overlap)
+                            else: combi_dict['query-query'].append(max_overlap)
 
         for combi_level in combi_dict.keys():
 
@@ -209,8 +232,7 @@ def check_n_gram_overlap (tokenized_cur, curriculums, NGRAM = 1, verbose=True):
             print(cur_combi)
             print(cur_combi_dict)
 
-    char_remove = "[]'"
-    with open(f"../data/{NGRAM}_gram_overlap_{str(curriculums).strip(char_remove)}.json",'w') as outfile: json.dump(n_gram_dict, outfile)
+    with open(outputfile,'w') as outfile: json.dump(n_gram_dict, outfile)
 
 def target_set_stats (target_df):
 
