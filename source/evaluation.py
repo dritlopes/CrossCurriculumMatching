@@ -1,6 +1,9 @@
 import numpy as np
 import json
-
+import argparse
+import pandas as pd
+from utils import find_query_copies
+from main import read_in_data
 
 def recall_at_k(r, fn, k):
 
@@ -264,4 +267,27 @@ def evaluate_dev_pre_study (pred, ann, parameters_basepath, query_copies, verbos
         f'Number of matches predicted in preliminarity study which are also predicted by this system: {true_positives + false_positives}\n'
         f'Out of these, proportion of correctly predicted matches: {precision}\n')
 
+def main():
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--results", required=True)
+    parser.add_argument("--gold", required=True)
+    args = parser.parse_args()
+
+    k = 5
+    source_filepath = f'../data/data_dict.json'
+    data_dict = read_in_data(source_filepath)
+    query_copies = find_query_copies(data_dict)
+
+    print('Evaluating results...')
+    print(f'MODEL: {args.results.replace(f"../results/", "")}\n')
+    test = pd.read_csv(args.gold, sep='\t', dtype={'TARGET_ID': str,'TARGET_GRADEID': str,'SOURCE_ID': str,'SOURCE_GRADEID': str})
+    predictions = pd.read_csv(args.results, sep='\t', dtype={'TARGET_ID': str, 'SOURCE_ID': str})
+    if 'GOLD' not in predictions.columns:
+        predictions = add_gold_column(predictions,test,query_copies)
+        predictions.to_csv(args.results,sep='\t',index=False) # save predictions with gold column
+    eval_filepath = f'../eval/{args.results.replace(f"../results/", "").strip(".csv")}.json'
+    eval_ranking(predictions, test, query_copies, k, eval_filepath)
+
+if __name__ == '__main__':
+    main()

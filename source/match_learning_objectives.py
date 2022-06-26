@@ -371,7 +371,7 @@ def classify(target_features, source_features, base_model, model_filepath, targe
     return rankings
 
 
-def find_best_queries (source, target, model, features, r, mode = None, age_to_grade = None, doc_sums_dict = None, uncased=False, base_model = None):
+def find_best_queries (source, target, model, features, r, mode = None, age_to_grade = None, doc_sums_dict = None, uncased = False, base_model = 'distilbert-base-uncased'):
 
     source_features = get_source_features(source, features, age_to_grade, uncased, doc_sums_dict)
     target_features = get_target_features(target, features, age_to_grade, uncased)
@@ -386,40 +386,3 @@ def find_best_queries (source, target, model, features, r, mode = None, age_to_g
         predictions = rank_cosine(source_encodings,source_info, target_encodings, target_info, r)
 
     return predictions
-
-# source_features = [{'query': 'Standard Deviation',
-#                 'topic': 'Statistics',
-#                 'subject': 'Mathematics',
-#                 'age': '16',
-#                 'doc_titles': ['How To Calculate The Standard Deviation',
-#                                'Standard Deviation (formulas, examples, solutions, videos)']},
-#                 {'query': 'Solar System',
-#                  'topic': 'Universe',
-#                  'subject': 'Physics',
-#                  'age': '7',
-#                  'doc_titles': ['']}]
-#
-# target_features = [{'query': 'Comparing standard deviation in datasets',
-#                 'topic': 'Summarizing data to a single value',
-#                 'subject': 'Statistics and Probability',
-#                 'age': '16'}]
-#
-# source_info = [{'id': '3432',
-#                 'label': 'Standard Deviation',
-#                 'path': 'Class 11>Mathematics>15 Statistics>Statistics'},
-#                {'id': '6768',
-#                 'label': 'Solar System',
-#                 'path': 'Class 7>Physics>The Universe>Universe>Solar System'}]
-#
-# target_info = [{'id': '5886',
-#                 'label': 'Comparing standard deviation in datasets',
-#                 'path': 'CCSS High School>Statistics and Probability>Interpreting Categorical and Quantitative Data>Summarizing data to a single value'}]
-#
-# source_encodings, target_encodings = get_encodings(source_features,target_features,'../models/cc.en.300.bin')
-# rankings = rank_cosine(source_encodings,source_info,target_encodings,target_info,2)
-
-# base_model = 'distilbert-base-uncased'
-# model_filepath = '../models/distilbert_doctitle,topic,subject,age_13.pth'
-#
-# predictions = classify(target_features,source_features,base_model,model_filepath,target_info,source_info,100)
-# print(predictions)

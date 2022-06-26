@@ -199,12 +199,12 @@ def get_groups_from_file(input):
         n += i
     return groups
 
-def prepare_data (predictions, data_dict, model_filepath, DATA_DIR, features, age_to_grade, mode, random_seed, query_copies=None, save_cosine=True):
+def prepare_data (predictions, data_dict, features, age_to_grade, mode, random_seed, query_copies=None, save_cosine=True):
 
     cos_data, y, groups = [], [], []
 
-    if os.path.isfile(f'{DATA_DIR}/ltr_input_{mode}_{random_seed}_grade,subject,topic.csv'):
-        input = pd.read_csv(f'{DATA_DIR}/ltr_input_{mode}_{random_seed}_grade,subject,topic.csv', sep='\t',dtype={'y':int,'group':int})
+    if os.path.isfile(f'../data/ltr_input_{mode}_{random_seed}_grade,subject,topic.csv'):
+        input = pd.read_csv(f'../data/ltr_input_{mode}_{random_seed}_grade,subject,topic.csv', sep='\t',dtype={'y':int,'group':int})
         y = input['y'].tolist()
         groups = get_groups_from_file(input['group'])
         assert len(input['y']) == sum(groups), 'Sum of queries in groups is not the same as in data'
@@ -222,7 +222,12 @@ def prepare_data (predictions, data_dict, model_filepath, DATA_DIR, features, ag
         info = get_info(data_dict, instances, age_to_grade, features)
         # print(info['30311'])
         # print(info['30310'])
-        model = SentenceTransformer(model_filepath)
+
+        if os.path.isfile(f'../models/paraphrase-sbert-label-title-rankingloss-nodup_{random_seed}'):
+            model = SentenceTransformer(f'../models/paraphrase-sbert-label-title-rankingloss-nodup_{random_seed}')
+        else:
+            raise Exception(f'SBERT not found. Please make sure "../models/paraphrase-sbert-label-title-rankingloss-nodup_{random_seed}" exists.')
+
         for pair in instances:
             y.append(pair['gold'])
             target = info[pair['target']]
@@ -243,7 +248,7 @@ def prepare_data (predictions, data_dict, model_filepath, DATA_DIR, features, ag
             input = pd.DataFrame.from_records(cos_data)
             input['group'] = [g for i in groups for g in [i] * i]
             input['y'] = y
-            input.to_csv(f'{DATA_DIR}/ltr_input_{mode}_{random_seed}_{features}.csv', sep='\t',index=False)
+            input.to_csv(f'../data/ltr_input_{mode}_{random_seed}_{features}.csv', sep='\t',index=False)
 
     vec = DictVectorizer()
     x = vec.fit_transform(cos_data)
@@ -260,12 +265,13 @@ def learning_rate_010_decay_power_0995(current_iter):
     return lr if lr > 1e-3 else 1e-3
 # reference stops here
 
-def train_ltr (train_predictions, dev_predictions, data_dict, model_filepath, model_save_path, random_seed, age_to_grade, features, query_copies, DATA_DIR):
+
+def train_ltr (train_predictions, dev_predictions, data_dict, model_save_path, random_seed, age_to_grade, features, query_copies):
 
     print(f'Training LambdaMART with features {features+",query"}')
     start_time = time.perf_counter()
-    train, train_groups, train_gold = prepare_data(train_predictions,data_dict, model_filepath, DATA_DIR, features, age_to_grade, 'train', random_seed, query_copies)
-    dev, dev_groups, dev_gold = prepare_data(dev_predictions,data_dict, model_filepath, DATA_DIR, features, age_to_grade, 'train', random_seed, query_copies)
+    train, train_groups, train_gold = prepare_data(train_predictions,data_dict, features, age_to_grade, 'train', random_seed, query_copies)
+    dev, dev_groups, dev_gold = prepare_data(dev_predictions,data_dict, features, age_to_grade, 'train', random_seed, query_copies)
     # print(train.shape, len(train_groups), len(train_gold))
 
     feature_names = features.replace('grade', 'age').split(',')
@@ -329,14 +335,14 @@ def train_ltr (train_predictions, dev_predictions, data_dict, model_filepath, mo
     #     json.dump(eval_dict, outfile)
 
 
-def ltr_infer (test, data_dict, k, k2, model_filepath, model_save_path, age_to_grade, features, results_filepath, random_seed, DATA_DIR):
+def ltr_infer (test, data_dict, k, k2, model_save_path, age_to_grade, features, results_filepath, random_seed):
 
     print('Re-ranking with LTR...')
     reranking = pd.DataFrame()
     model = lgb.Booster(model_file=model_save_path)
     print(f'LTR model features: {model.feature_name()}')
     print(f'LTR feature importance: {model.feature_importance()}')
-    x, groups, y = prepare_data(test, data_dict, model_filepath, DATA_DIR, features, age_to_grade, 'test', random_seed)
+    x, groups, y = prepare_data(test, data_dict, features, age_to_grade, 'test', random_seed)
     targets = list(test.groupby(['TARGET_ID']))
     split = range(k, x.shape[0], k)
     target_index = range(0, len(groups))

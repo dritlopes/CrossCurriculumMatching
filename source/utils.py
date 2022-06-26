@@ -44,7 +44,7 @@ def read_in_dump (dump_filepath):
 
     return df
 
-def dump_to_json (filepath, DATA_DIR):
+def dump_to_json (filepath):
 
     """
     Create dictionary of all curriculum trees from the dumpfile for quicker lookup
@@ -82,11 +82,11 @@ def dump_to_json (filepath, DATA_DIR):
             'topic'][row['TOPICID']]['query'][row['QUERYID']]['docs'][row['RESULTURL']]['title'] = row['RESULTTITLE']
         # web pages 'title' : resulttitle}}}}}}
 
-    with open(f'{DATA_DIR}/data_dict.json','w') as outfile:
+    with open(f'../data/data_dict.json','w') as outfile:
         json.dump(data_dict, outfile)
 
 
-def find_query_copies (data_dict, DATA_DIR):
+def find_query_copies (data_dict):
 
     """
     Find which query ID's are copies of each other. Query ID's are considered copies when they have the same uncased text
@@ -128,13 +128,13 @@ def find_query_copies (data_dict, DATA_DIR):
                 if query_docs[i][0] not in query_copies[query[1]]:
                     query_copies[query[1]].append(query_docs[i][0])
 
-    with open(f'{DATA_DIR}/query_copies.json','w') as outfile:
+    with open(f'../data/query_copies.json','w') as outfile:
         json.dump(query_copies, outfile)
 
     return query_copies
 
 
-def generate_shared_docs_set (dump_filepath, included_cur, query_copies, DATA_DIR = '../data' , verbose = False):
+def generate_shared_docs_set (dump_filepath, included_cur, query_copies, verbose = False):
 
     """
     Generate data of automatically annotated query pairs. If two queries from different curricula share at least one pinned document,
@@ -205,7 +205,7 @@ def generate_shared_docs_set (dump_filepath, included_cur, query_copies, DATA_DI
     df = pd.DataFrame(eval_dict)
     df = df.drop_duplicates(subset=['TARGET_ID', 'SOURCE_ID'])  # WHEN TARGET AND SOURCE SHARE MORE THAN ONE WEB PAGE
     df = df.sort_values(by=['TARGET_CURRICULUM','TARGET_ID'])
-    df.to_csv(f"{DATA_DIR}/query_pairs_{included_cur}.csv",sep="\t",index=False)
+    df.to_csv(f"../data/query_pairs_{included_cur}.csv",sep="\t",index=False)
 
     if verbose:
         print('\n####### Set of queries that share webpages #######')
@@ -217,7 +217,6 @@ def generate_shared_docs_set (dump_filepath, included_cur, query_copies, DATA_DI
         dist.sort(key=lambda x:x[1],reverse=True)
         for cur, p in dist:
             print(f"{cur}: {round(p,4)}")
-
 
 def grade_by_age (included_cur, age_filepath = '../data/MASTER Reading levels and age filter settings (pwd 123456).xlsx'):
 
@@ -256,7 +255,6 @@ def grade_by_age (included_cur, age_filepath = '../data/MASTER Reading levels an
 
     return age_to_grade
 
-
 def find_age (age_to_grade,curriculum,grade):
 
     """
@@ -283,8 +281,7 @@ def find_age (age_to_grade,curriculum,grade):
 
     return target_age
 
-
-def generate_doc_sums (data_dict, source_curriculums, DATA_DIR):
+def generate_doc_sums (data_dict, source_curriculums):
 
     """
     Write out file with summary of documents per query.
@@ -293,7 +290,7 @@ def generate_doc_sums (data_dict, source_curriculums, DATA_DIR):
     """
 
     start_time = time.perf_counter()
-    with open(f'{DATA_DIR}/doc_sums.csv','w') as out:
+    with open(f'../data/doc_sums.csv','w') as out:
         out.write(f'queryId\turl\tsumText\n')
 
         for cur_id, cur in data_dict.items():
@@ -335,8 +332,7 @@ def target_subset(target_data, n):
 
     return target_sub
 
-
-def generate_train_test(target_data, DATA_DIR, random_seed = 42, verbose=False):
+def generate_train_test(target_data, random_seed = 42, verbose=False):
 
     """
     Given dataset of query pairs, split into train, dev and test and write them out.
@@ -349,9 +345,9 @@ def generate_train_test(target_data, DATA_DIR, random_seed = 42, verbose=False):
     data_dev = pd.DataFrame()
     data_test = pd.DataFrame()
 
-    filepaths = [f'{DATA_DIR}/train_query_pairs_{random_seed}.csv',
-                 f'{DATA_DIR}/dev_query_pairs_{random_seed}.csv',
-                 f'{DATA_DIR}/test_query_pairs_{random_seed}.csv']
+    filepaths = [f'../data/train_query_pairs_{random_seed}.csv',
+                 f'../data/dev_query_pairs_{random_seed}.csv',
+                 f'../data/test_query_pairs_{random_seed}.csv']
 
     train_ratio, test_ratio, val_ratio = 0.7, 0.2, 0.1
     for cur_name, cur_group in target_data.groupby(['TARGET_CURRICULUM']):
@@ -386,7 +382,6 @@ def generate_train_test(target_data, DATA_DIR, random_seed = 42, verbose=False):
 
             for cur, p in dist:
                 print(f"{cur}: {round(p, 4)}\n")
-
 
 def generate_test_lebanon (filepath_to_excel, output_file):
 
@@ -431,7 +426,6 @@ def generate_test_lebanon (filepath_to_excel, output_file):
 
     target_data.to_csv(output_file, index=False, sep='\t')
 
-
 def generate_triplets_file (FILEPATH, TRIPLETS_FILE):
 
     """
@@ -471,7 +465,6 @@ def generate_triplets_file (FILEPATH, TRIPLETS_FILE):
         out.write('qid' + '\t' + 'pos_id' + '\t' + 'neg_id' + '\n')
         for i in range(len(target_queries)):
             out.write(f'{target_queries[i]}\t{positive_queries[i]}\t{negative_queries[i]}\n')
-
 
 def generate_query_file(DATA_DICT_FILE, QUERY_FILE, queries, doc_sums):
 
@@ -538,7 +531,6 @@ def generate_query_file(DATA_DICT_FILE, QUERY_FILE, queries, doc_sums):
                 f'{query_dict["id"]}\t{query_dict["label"]}\t{query_dict["doc_titles"]}\t{query_dict["doc_sums_1sent"]}'
                 f'\t{query_dict["doc_sums_nsent"]}\n')
 
-
 def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade, curriculums):
 
     with open(data_dict_filepath) as json_file:
@@ -554,7 +546,7 @@ def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade
                             for query_id, query in topic['query'].items():
                                 label = query['label']
                                 if label == '': label = topic['label']
-                                query_dict = {'id': query_id,
+                                query_dict = {'id': str(query_id),
                                               'query_term': label.strip(),
                                               'topic': topic['label'].strip(),
                                               'subject': subject['label'].strip(),
@@ -567,7 +559,7 @@ def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade
                                               'doc_sums_nsent': ''}
 
                                 age = find_age(age_to_grade, cur['label'], grade['label'])
-                                query_dict['age'] = age
+                                query_dict['age'] = str(age)
 
                                 # Including organic documents
                                 # query_dict = {'id': query_id,
@@ -593,16 +585,15 @@ def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade
                                     query_dict['doc_sums_1sent'] = ' '.join(doc_sums_1sent).strip()
                                     query_dict['doc_sums_nsent'] = ' '.join(doc_sums_nsent).strip()
 
-                                for key, v in query_dict.items():
-                                    new = v.replace('\n', '')
-                                    new = new.replace('\t', '')
+                                for key,v in query_dict.items():
+                                    new = v.replace('\n','')
+                                    new = new.replace('\t','')
                                     query_dict[key] = new
 
                                 rows.append(query_dict)
 
     with open(info_filepath, 'w', encoding="utf-8") as out:
-        headers = ['query_id', 'query_term', 'doc_titles', 'doc_sums_1sent', 'doc_sums_nsents', 'topic', 'subject',
-                   'grade',
+        headers = ['query_id', 'query_term', 'doc_titles', 'doc_sums_1sent', 'doc_sums_nsents', 'topic', 'subject', 'grade',
                    'age', 'curriculum']
         headers = '\t'.join(headers) + '\n'
         out.write(headers)

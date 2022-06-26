@@ -601,9 +601,8 @@ def count_error_types (df):
 
         subj = list(group['SUBJECT'])
         age = list(group['AGE'])
-        group['UNIT/TOPIC'].apply(lambda x : x.strip())
-        group['QUERY'].apply(lambda x: x.strip())
         topic = list(group['UNIT/TOPIC'])
+        topic = [cell.strip() for cell in topic]
         query = list(group['QUERY'])
 
         all = [combi for combi in zip(subj,age,topic,query)]
@@ -620,37 +619,50 @@ def count_error_types (df):
 
     return all_models
 
-def error_types_barplot (all_models, output_filepath, layers):
+def error_types_barplot (all_models, output_filepath, layers, freq = 0.1):
 
     # model in x axis, percentage in y axis, error combinations in colors
-    df_dict = defaultdict(list)
-    removed = defaultdict(list)
-    all_combis = []
-
     if layers == 'TOPIC,QUERY': index = 2
     else: index = 1
 
-    for model, list_ in all_models.items():
-        df_dict['model'].append(model)
-        for combi, count in list_[index].items():
-            frequency = round(count/sum(list(list_[index].values())),2)
-            if index == 2:
-                if frequency > 0.1:
-                    df_dict[f'{combi[0]}-{combi[1]}'].append(frequency)
-                    all_combis.append(combi)
-                else:
-                    removed[model].append(combi)
-            else:
-                df_dict[f'{combi[0]}-{combi[1]}'].append(frequency)
+    if index == 2:
+        freq_dict = defaultdict(dict)
+        for model, list_ in all_models.items():
+            for combi, count in list_[index].items():
+                frequency = round(count/sum(list(list_[index].values())),2)
+                freq_dict[model][combi] = frequency
+        add = []
+        for model, dict_ in freq_dict.items():
+            for combi, frequency in dict_.items():
+                if frequency > freq:
+                    add.append(combi)
 
-    for model,list_ in all_models.items():
-        for combi in all_combis:
-            if combi in removed[model]: df_dict[f'{combi[0]}-{combi[1]}'].append(round(list_[index][combi]/sum(list(list_[index].values())),2))
+        df_dict = defaultdict(list)
+        for combi in set(add):
+            for model, dict_ in freq_dict.items():
+                key = f'{combi[0]}/{combi[1]}'
+                if combi[0] == combi[1]: key = combi[0]
+                frequency = 0
+                if combi in dict_.keys(): frequency = dict_[combi]
+                df_dict[key].append(frequency)
+        df_dict['model'] = list(freq_dict.keys())
 
-    print(df_dict)
+    # df_dict = defaultdict(list)
+    #
+    # if layers == 'TOPIC,QUERY': index = 2
+    # else: index = 1
+    #
+    # for model, list_ in all_models.items():
+    #     df_dict['model'].append(model)
+    #     for combi, count in list_[index].items():
+    #         frequency = round(count/sum(list(list_[index].values())),2)
+    #         df_dict[f'{combi[0]}-{combi[1]}'].append(frequency)
+    #
+
     df = pd.DataFrame(df_dict)
-    # plt.figure(figsize=(11, 9))
+    plt.rcParams.update({'font.size': 13})
     df.set_index('model').plot(kind='bar', stacked=True)
+    if index == 2: plt.gcf().set_size_inches(12, 10)
     plt.xticks(rotation=45)
     if index == 1: plt.legend(labels=['sbj+age+','sbj+age-','sbj-age-','sbj-age+'])
     plt.savefig(output_filepath)

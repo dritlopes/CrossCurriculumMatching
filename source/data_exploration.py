@@ -9,6 +9,7 @@ from collections import Counter
 import math
 import string
 from utils import grade_by_age, find_age
+from main import read_in_data
 
 # In case nltk lemmatizer throws "Resource omw-1.4 not found", uncomment block below.
 # import nltk
@@ -271,3 +272,10 @@ def data_distribution (data):
         print(f'Curriculum: {cur}\n'
               f'N of target LO: {len(group["TARGET_ID"].unique())}\n'
               f'Proportion: {len(group["TARGET_ID"].unique())/len(data["TARGET_ID"].unique())}')
+
+def main():
+
+    source_filepath = f'../data/data_dict.json'
+    curriculums = 'ICSE,CBSE,Cambridge,English,CCSS,NGSS,Scotland'
+    data_dict = read_in_data(source_filepath)
+    generate_stats(data_dict,curriculums=curriculums+',Lebanon,CSTA')

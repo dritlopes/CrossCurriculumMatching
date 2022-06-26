@@ -167,13 +167,10 @@ def main():
     #               'subject': [("Math", "Science"), ("Physics", "Biology")],
     #               'y': [1, 1]}
     #
-    DATA_DIR = sys.argv[1]
-    MODEL_SAVE = sys.argv[2]
-    OUTPUT_DIR = sys.argv[3]
 
-    # DATA_DIR = f'../data'
-    # OUTPUT_DIR = f'../eval'
-    # MODEL_SAVE = '../models'
+    DATA_DIR = f'../data'
+    OUTPUT_DIR = f'../eval'
+    MODEL_SAVE = '../models'
 
     TRAIN_FILE = f'{DATA_DIR}/train_query_pairs_13.csv'
     TRAIN_PAIR_FILE = f'{DATA_DIR}/train_pairs_13.csv'
