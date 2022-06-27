@@ -59,7 +59,6 @@ def input_features(info, pairs):
 
     source, target, age, subject, labels = [], [], [], [], []
     for line in pairs:
-        # TODO change this to accept different combis of features
         target.append(f"{info_dict[line['target_id']]['query_term']} {info_dict[line['target_id']]['topic']}")
         source.append(f"{info_dict[line['source_id']]['query_term']} {info_dict[line['source_id']]['topic']} "
                       f"{info_dict[line['source_id']]['doc_titles']}")
@@ -98,7 +97,7 @@ class PairDataset(Dataset):
             for t, s in zip(age_target,age_source):
                 t = torch.from_numpy(t.toarray())
                 s = torch.from_numpy(s.toarray())
-                concat = torch.concat((t,s),1)
+                concat = torch.cat((t,s),1)
                 ages.append(concat)
             ages = torch.stack(ages)
             ages = torch.squeeze(ages)
@@ -165,12 +164,12 @@ class Model(nn.Module):
             # embeddings = self.embedding_subject(subject)
             # avg_emb = torch.mean(embeddings, 1)
             # print(avg_emb.size())
-            input_vectors = torch.concat((input_vectors, sbj_vectors),1)
+            input_vectors = torch.cat((input_vectors, sbj_vectors),1)
 
         if age != None:
             embeddings = self.embedding_age(age)
             avg_emb = torch.mean(embeddings,2)
-            input_vectors = torch.concat((input_vectors, avg_emb),1)
+            input_vectors = torch.cat((input_vectors, avg_emb),1)
             # print(input_vectors.size())
 
         # classifier

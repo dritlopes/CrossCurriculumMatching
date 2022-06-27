@@ -9,6 +9,7 @@ from main import read_in_data
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_save", required=True)
 parser.add_argument("--features", required=True)
+parser.add_argument("--random_seed", required=True, choices=["42","13","7"])
 args = parser.parse_args()
 
 source_filepath = '../data/data_dict.json'
@@ -18,21 +19,20 @@ data_dict = read_in_data(source_filepath)
 query_copies = find_query_copies(data_dict)
 age_to_grade = grade_by_age(curriculums,age_filepath)
 
-for random_seed in [42,7,13]:
 
-    ranking4training = f'../results/train_paraphrase-sbert-label-title-rankingloss-nodup_{random_seed}_top30_doc_title.csv'
-    ranking4dev = f'../results/dev_paraphrase-sbert-label-title-rankingloss-nodup_{random_seed}_top30_doc_title.csv'
+ranking4training = f'../results/train_paraphrase-sbert-label-title-rankingloss-nodup_{args.random_seed}_top30_doc_title.csv'
+ranking4dev = f'../results/dev_paraphrase-sbert-label-title-rankingloss-nodup_{args.random_seed}_top30_doc_title.csv'
 
-    if not os.path.isfile(ranking4training):
-        raise Exception(f'{ranking4training} not found. Please make sure to add the predictions needed for training re-ranker')
+if not os.path.isfile(ranking4training):
+    raise Exception(f'{ranking4training} not found. Please make sure to add the predictions needed for training re-ranker')
 
-    train_pred = pd.read_csv(ranking4training,
-                            sep='\t', dtype= {'TARGET_ID': str,
-                                            'TARGET_GRADEID': str,
-                                            'SOURCE_ID': str,
-                                            'SOURCE_GRADEID': str})
+train_pred = pd.read_csv(ranking4training,
+                        sep='\t', dtype= {'TARGET_ID': str,
+                                        'TARGET_GRADEID': str,
+                                        'SOURCE_ID': str,
+                                        'SOURCE_GRADEID': str})
 if 'GOLD' not in train_pred.columns:
-    train_gold = pd.read_csv(f'../data/train_query_pairs_{random_seed}.csv', sep='\t', dtype= {'TARGET_ID': str,
+    train_gold = pd.read_csv(f'../data/train_query_pairs_{args.random_seed}.csv', sep='\t', dtype= {'TARGET_ID': str,
                                                                    'TARGET_GRADEID': str,
                                                                    'SOURCE_ID': str,
                                                                    'SOURCE_GRADEID': str})
@@ -48,7 +48,7 @@ dev_pred = pd.read_csv(ranking4dev,sep='\t', dtype={'TARGET_ID': str,
                                                     'SOURCE_GRADEID': str})
 
 if 'GOLD' not in dev_pred.columns:
-    dev_gold = pd.read_csv(f'../data/dev_query_pairs_{random_seed}.csv', sep='\t',
+    dev_gold = pd.read_csv(f'../data/dev_query_pairs_{args.random_seed}.csv', sep='\t',
                                                 dtype={'TARGET_ID': str,
                                               'TARGET_GRADEID': str,
                                               'SOURCE_ID': str,
@@ -60,7 +60,7 @@ train_ltr(train_pred,
           dev_pred,
           data_dict,
           args.model_save,
-          random_seed,
+          args.random_seed,
           age_to_grade,
           args.features,
           query_copies)

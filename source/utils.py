@@ -1,6 +1,5 @@
 import pandas as pd
 from collections import defaultdict
-import json
 from itertools import permutations
 import re
 import warnings
@@ -13,6 +12,21 @@ from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk import pos_tag
 import os
 
+def read_in_data(source_filepath):
+
+    if os.path.isfile(source_filepath):
+
+        if source_filepath != f'../data/data_dict.json':
+            dump_to_json(source_filepath)
+
+        with open(f'../data/data_dict.json') as json_file:
+            data = json.load(json_file)
+
+    else:
+        print(f'{source_filepath} not found. Please make sure the source data is either the dump csv or a json file in the data folder of this repo')
+        exit()
+
+    return data
 
 def read_in_dump (dump_filepath):
 
@@ -230,7 +244,7 @@ def grade_by_age (included_cur, age_filepath = '../data/MASTER Reading levels an
         print(f'{age_filepath} not found. Please add this file to get target age per grade')
         exit()
     else:
-        age_df = pd.read_excel(age_filepath)
+        age_df = pd.read_excel(age_filepath,engine='openpyxl')
         age_df = age_df.fillna('')
         age_to_grade = defaultdict(list)
         for age, group in age_df.groupby(['Column1.nodes.defaultAge']):
@@ -425,111 +439,6 @@ def generate_test_lebanon (filepath_to_excel, output_file):
     target_data['TARGET_ID'] = target_ids
 
     target_data.to_csv(output_file, index=False, sep='\t')
-
-def generate_triplets_file (FILEPATH, TRIPLETS_FILE):
-
-    """
-    For training SBERT on triplet architecture, generate file where each row is a instance containing the ids of the
-    anchor text, the positive example and the negative example.
-    :param FILEPATH: filepath to train or dev set
-    :param TRIPLETS_FILE: filepath to save triplets file
-    """
-
-    positive_pairs = pd.read_csv(FILEPATH, sep='\t', dtype={'TARGET_ID': str,
-                                                            'SOURCE_ID': str,
-                                                            'TARGET_GRADEID': str,
-                                                            'SOURCE_GRADEID': str})
-
-    positive_pairs = positive_pairs.drop_duplicates(['TARGET_ID'])
-    target_queries = positive_pairs['TARGET_ID'].tolist()
-    positive_queries = positive_pairs['SOURCE_ID'].tolist()
-
-    # find a negative example for each target query from the remaining queries (not in target curriculum, not in positive set and not the search query)
-    negative_queries = []
-    queries = [(cur, query) for cur, query in
-               zip(positive_pairs['TARGET_CURRICULUM'].tolist(), positive_pairs['TARGET_ID'].tolist())]
-    random.seed(42)
-
-    for group_name, group in positive_pairs.groupby(['TARGET_CURRICULUM', 'TARGET_ID']):
-        for i, row in group.iterrows():
-            neg = random.choice(queries)
-            while neg[0] == group_name[0] or neg[1] in group['SOURCE_ID'].tolist() or neg[1] in group[
-                'TARGET_ID'].tolist():
-                neg = random.choice(queries)
-            negative_queries.append(neg[1])
-
-    assert len(negative_queries) == len(
-        positive_pairs), f'Not the same number of negative and positive examples. {len(negative_queries)} negative examples, {len(positive_pairs)} positive examples'
-
-    with open(f'{TRIPLETS_FILE}', 'w') as out:
-        out.write('qid' + '\t' + 'pos_id' + '\t' + 'neg_id' + '\n')
-        for i in range(len(target_queries)):
-            out.write(f'{target_queries[i]}\t{positive_queries[i]}\t{negative_queries[i]}\n')
-
-def generate_query_file(DATA_DICT_FILE, QUERY_FILE, queries, doc_sums):
-
-    """
-    Given query ids that form the triples for training, store corresponding texts.
-    :param DATA_DICT_FILE: dict with curriculum trees
-    :param QUERY_FILE: filepath to write out file with texts
-    :param queries: query ids that appear in training instances
-    :param doc_sums: in case summary of documents is used, a dict with doc summaries per query id
-    """
-
-    with open(DATA_DICT_FILE) as json_file:
-        data = json.load(json_file)
-
-    rows = []
-    for cur_id, cur in data.items():
-        for grade_id, grade in cur['grade'].items():
-            for subject_id, subject in grade['subject'].items():
-                for unit_id, unit in subject['unit'].items():
-                    for topic_id, topic in unit['topic'].items():
-                        for query_id, query in topic['query'].items():
-
-                            if query_id in queries:
-                                label = query['label']
-                                if label == '': label = topic['label']
-                                query_dict = {'id': query_id,
-                                              'label': label,
-                                              'doc_titles': ' '.join(
-                                                  [doc_info['title'] for doc_info in query['docs'].values() if
-                                                   doc_info['pin']]),
-                                              'doc_sums_1sent': '',
-                                              'doc_sums_nsent': ''}
-
-                                # Including organic documents
-                                # query_dict = {'id': query_id,
-                                #              'label': label,
-                                #              'doc_titles': ' '.join(
-                                #                  [doc_info['title'] for doc_info in query['docs'].values()]),
-                                #               'doc_sums_1sent': '',
-                                #               'doc_sums_nsent': ''}
-
-                                if doc_sums[query_id]:
-                                    doc_sums_1sent = []
-                                    doc_sums_nsent = []
-                                    for sum in doc_sums[query_id]:
-                                        sents = sent_tokenize(sum)
-                                        doc_sums_1sent.append(sents[0])
-                                        tags_label = pos_tag(word_tokenize(label))
-                                        nouns = [word for word, pos in tags_label if pos.startswith('NN')]
-                                        for sent in sents:
-                                            tokens = word_tokenize(sent)
-                                            for token in tokens:
-                                                if token in nouns and sent not in doc_sums_nsent:
-                                                    doc_sums_nsent.append(sent)
-                                    query_dict['doc_sums_1sent'] = ' '.join(doc_sums_1sent)
-                                    query_dict['doc_sums_nsent'] = ' '.join(doc_sums_nsent)
-
-                                rows.append(query_dict)
-
-    with open(QUERY_FILE, 'w') as out:
-        out.write('id' + '\t' + 'label' + '\t' + 'docTitles' + '\t' + 'docSums1sent' + '\t' + 'docSumsNsent' + '\n')
-        for query_dict in rows:
-            out.write(
-                f'{query_dict["id"]}\t{query_dict["label"]}\t{query_dict["doc_titles"]}\t{query_dict["doc_sums_1sent"]}'
-                f'\t{query_dict["doc_sums_nsent"]}\n')
 
 def generate_info_file(data_dict_filepath, info_filepath, doc_sums, age_to_grade, curriculums):
 

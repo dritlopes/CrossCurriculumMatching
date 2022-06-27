@@ -5,7 +5,7 @@ def match_query (q, curriculums, qualifiers):
 
     q = q.replace(' ', '%20')
     url = f'https://api.wizenoze.com/v4/curriculum/curator/curriculum/search?q={q}&qualifiers={qualifiers}&curriculums={curriculums}'
-    headers = {'Authorization': 'cb880a2e-e227-4e80-82e3-c510136cd0cd',
+    headers = {'Authorization': '', # add authorization key to access tf-idf model
                'Content-Type': 'application/json',
                'charset': 'utf8'}
     response = requests.get(url, headers=headers)

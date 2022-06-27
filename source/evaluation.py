@@ -2,8 +2,7 @@ import numpy as np
 import json
 import argparse
 import pandas as pd
-from utils import find_query_copies
-from main import read_in_data
+from utils import find_query_copies, read_in_data
 
 def recall_at_k(r, fn, k):
 

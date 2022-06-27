@@ -8,8 +8,7 @@ from nltk.util import ngrams
 from collections import Counter
 import math
 import string
-from utils import grade_by_age, find_age
-from main import read_in_data
+from utils import read_in_data, grade_by_age, find_age
 
 # In case nltk lemmatizer throws "Resource omw-1.4 not found", uncomment block below.
 # import nltk
@@ -278,4 +277,8 @@ def main():
     source_filepath = f'../data/data_dict.json'
     curriculums = 'ICSE,CBSE,Cambridge,English,CCSS,NGSS,Scotland'
     data_dict = read_in_data(source_filepath)
-    generate_stats(data_dict,curriculums=curriculums+',Lebanon,CSTA')
+    generate_stats(data_dict,curriculums=curriculums)
+
+
+if __name__ == '__main__':
+    main()
