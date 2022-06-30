@@ -1,4 +1,0 @@
-TF-IDF baseline
-Curriculum: Lebanon
-Grade: Intermediate - Year 7
-MAP: 0.7816392208889728,MRR: 0.8395833333333332

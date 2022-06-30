@@ -647,17 +647,20 @@ def error_types_barplot (all_models, output_filepath, layers, freq = 0.1):
                 df_dict[key].append(frequency)
         df_dict['model'] = list(freq_dict.keys())
 
-    # df_dict = defaultdict(list)
-    #
-    # if layers == 'TOPIC,QUERY': index = 2
-    # else: index = 1
-    #
-    # for model, list_ in all_models.items():
-    #     df_dict['model'].append(model)
-    #     for combi, count in list_[index].items():
-    #         frequency = round(count/sum(list(list_[index].values())),2)
-    #         df_dict[f'{combi[0]}-{combi[1]}'].append(frequency)
-    #
+    else:
+        freq_dict = defaultdict(dict)
+        for model, list_ in all_models.items():
+            for combi, count in list_[index].items():
+                frequency = round(count / sum(list(list_[index].values())), 2)
+                freq_dict[model][combi] = frequency
+        df_dict = defaultdict(list)
+        for model, dict_ in freq_dict.items():
+            df_dict['model'].append(model)
+            for combi in [(1,1), (1,0), (0,0), (0,1)]:
+                if combi in dict_.keys():
+                    df_dict[f'{combi[0]}/{combi[1]}'].append(dict_[combi])
+                else:
+                    df_dict[f'{combi[0]}/{combi[1]}'].append(0)
 
     df = pd.DataFrame(df_dict)
     plt.rcParams.update({'font.size': 13})
@@ -665,6 +668,42 @@ def error_types_barplot (all_models, output_filepath, layers, freq = 0.1):
     if index == 2: plt.gcf().set_size_inches(12, 10)
     plt.xticks(rotation=45)
     if index == 1: plt.legend(labels=['sbj+age+','sbj+age-','sbj-age-','sbj-age+'])
+    plt.savefig(output_filepath)
+    plt.show()
+
+def count_hit_types (df):
+
+    all_models = dict()
+    for model, group in df.groupby(['MODEL']):
+
+        all = [type.strip() for type in group['RELATION'].tolist()]
+        counts = Counter(all)
+        all_models[model] = counts
+
+    return all_models
+
+def hit_types_barplot (all_models, output_filepath):
+
+    freq_dict = defaultdict(dict)
+    df_dict = defaultdict(list)
+
+    for model, counter in all_models.items():
+        for type, count in counter.items():
+            frequency = round(count / sum(list(counter.values())), 2)
+            freq_dict[model][type] = frequency
+    for model, dict_ in freq_dict.items():
+        df_dict['model'].append(model)
+        for type in ['full', 'partial', 'more specific', 'more general']:
+            if type in dict_.keys():
+                df_dict[type].append(dict_[type])
+            else:
+                df_dict[type].append(0)
+
+    df = pd.DataFrame(df_dict)
+    plt.rcParams.update({'font.size': 13})
+    df.set_index('model').plot(kind='bar', stacked=True)
+    plt.gcf().set_size_inches(12, 10)
+    plt.xticks(rotation=45)
     plt.savefig(output_filepath)
     plt.show()
 
@@ -753,13 +792,24 @@ def error_types_barplot (all_models, output_filepath, layers, freq = 0.1):
 #     tokenized = tokenize_instances(data, curriculums='ICSE,CBSE', subjects='Mathematics', ages=age)
 #     check_n_gram_overlap(tokenized, f'../data/1_gram_overlap_ICSE,CBSE_Math_{age}.json')
 
-annotations = '../eval/analysis_hits_errors_Somya.xlsx'
-work_sheet = 'incorrect_matches_rq1_1%'
+# annotations = '../eval/analysis_hits_errors_Somya.xlsx'
+# work_sheet = 'incorrect_matches_rq1_1%'
+# df = read_in_sheet(annotations, work_sheet)
+# all_counts = count_error_types(df)
+# error_types_barplot(all_counts, f'../eval/fig_error_types_rq1_topic_query.png',layers='TOPIC,QUERY')
+# annotations = '../eval/analysis_hits_errors_Somya.xlsx'
+# work_sheet = 'incorrect_matches_rq2_1%'
+# df = read_in_sheet(annotations, work_sheet)
+# all_counts = count_error_types(df)
+# error_types_barplot(all_counts, f'../eval/fig_error_types_rq2_topic_query.png',layers='TOPIC,QUERY')
+
+annotations = '../eval/analysis_hits_errors.xlsx'
+work_sheet = 'correct_matches_rq1_5%'
 df = read_in_sheet(annotations, work_sheet)
-all_counts = count_error_types(df)
-error_types_barplot(all_counts, f'../eval/fig_error_types_rq1_topic_query.png',layers='TOPIC,QUERY')
-annotations = '../eval/analysis_hits_errors_Somya.xlsx'
-work_sheet = 'incorrect_matches_rq2_1%'
+all_counts = count_hit_types(df)
+hit_types_barplot(all_counts, f'../eval/fig_hit_types_rq1.png')
+annotations = '../eval/analysis_hits_errors.xlsx'
+work_sheet = 'correct_matches_rq2_5%'
 df = read_in_sheet(annotations, work_sheet)
-all_counts = count_error_types(df)
-error_types_barplot(all_counts, f'../eval/fig_error_types_rq2_topic_query.png',layers='TOPIC,QUERY')
+all_counts = count_hit_types(df)
+hit_types_barplot(all_counts, f'../eval/fig_hit_types_rq2.png')
