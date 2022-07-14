@@ -46,7 +46,7 @@ Additionally, `utils.py` contains general helper functions, `generate_search_spa
 
 ### /data
 
-
+This folder should contain the data to be used for matching.
 
 ### /models
 
